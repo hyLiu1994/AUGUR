@@ -90,7 +90,10 @@ def load_config(yaml_path: Optional[str] = None, cli_args: Optional[list] = None
     valid_keys = {f.name for f in fields(ExperimentConfig)}
     config_dict = {k: v for k, v in config_dict.items() if k in valid_keys}
 
-    return ExperimentConfig(**config_dict)
+    config = ExperimentConfig(**config_dict)
+    # Expand ~ in paths
+    config.data_dir = os.path.expanduser(config.data_dir)
+    return config
 
 
 def _load_yaml_with_base(yaml_path: str) -> dict:
