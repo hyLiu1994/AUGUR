@@ -1,4 +1,7 @@
 _base_: default.yaml
 
-data_dir: ~/Datasets/Porto
-note: porto
+data:
+  dir: ~/Datasets/Porto
+
+output:
+  note: porto

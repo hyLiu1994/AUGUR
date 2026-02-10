@@ -17,6 +17,7 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from dataclasses import asdict
 from src.config import load_config, save_config, create_run_dir
 from src.data_loader import load_and_segment, create_sequences, TrajectoryDataset
 from src.trainer import train_model, load_checkpoint
@@ -41,7 +42,7 @@ def main():
     config = load_config()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
-    print(f"Model: {config.model_type}")
+    print(f"Model: {config.model.type}")
 
     # Create run directory
     run_dir = create_run_dir(config)
@@ -59,22 +60,22 @@ def main():
     # === Step 2: Load or train model (skip if only model-free strategies) ===
     if not needs_model:
         print("\n=== Step 2: Skipped (no model needed for selected strategies) ===")
-    elif config.load_model:
-        print(f"\n=== Step 2: Loading model from {config.load_model} ===")
-        model, stats = load_checkpoint(config, config.load_model, device)
+    elif config.training.load_model:
+        print(f"\n=== Step 2: Loading model from {config.training.load_model} ===")
+        model, stats = load_checkpoint(config, config.training.load_model, device)
     else:
-        print(f"\n=== Step 2: Train {config.model_type} model ===")
+        print(f"\n=== Step 2: Train {config.model.type} model ===")
         # Prepare training data
-        all_segments = load_and_segment(config.data_dir, min_segment_len=20)
-        if config.data_fraction < 1.0:
+        all_segments = load_and_segment(config.data.dir, min_segment_len=20)
+        if config.data.fraction < 1.0:
             rng = np.random.default_rng(config.seed)
-            n_seg_use = max(10, int(len(all_segments) * config.data_fraction))
+            n_seg_use = max(10, int(len(all_segments) * config.data.fraction))
             seg_indices = rng.permutation(len(all_segments))[:n_seg_use]
             all_segments = [all_segments[i] for i in seg_indices]
-            print(f"  Using {config.data_fraction:.0%} of segments: {len(all_segments)}")
+            print(f"  Using {config.data.fraction:.0%} of segments: {len(all_segments)}")
 
         inputs, targets, stats = create_sequences(
-            all_segments, seq_len=config.seq_len, pred_len=config.pred_len
+            all_segments, seq_len=config.model.seq_len, pred_len=config.model.pred_len
         )
 
         n_total = len(inputs)
@@ -87,8 +88,8 @@ def main():
         val_ds = TrajectoryDataset(inputs[n_train_seq:], targets[n_train_seq:])
 
         from torch.utils.data import DataLoader
-        train_loader = DataLoader(train_ds, batch_size=config.batch_size, shuffle=True)
-        val_loader = DataLoader(val_ds, batch_size=config.batch_size, shuffle=False)
+        train_loader = DataLoader(train_ds, batch_size=config.training.batch_size, shuffle=True)
+        val_loader = DataLoader(val_ds, batch_size=config.training.batch_size, shuffle=False)
         print(f"  Train: {len(train_ds)}, Val: {len(val_ds)} sequences")
 
         model = train_model(config, train_loader, val_loader, device, save_dir=run_dir)
@@ -147,7 +148,7 @@ def main():
     summary = {
         "timestamp": datetime.now().isoformat(),
         "run_dir": run_dir,
-        "config": {k: v for k, v in vars(config).items()},
+        "config": asdict(config),
         "stats": {"mean": stats["mean"].tolist(), "std": stats["std"].tolist()} if stats else None,
         "results": {
             name: {k: v for k, v in r.items() if k not in ("uncertainties", "pred_errors")}
@@ -158,7 +159,7 @@ def main():
         json.dump(summary, f, indent=2)
 
     # Append to CSV log
-    csv_path = config.csv_log
+    csv_path = config.output.csv_log
     os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
     file_exists = os.path.exists(csv_path)
     run_id = os.path.basename(run_dir)
@@ -171,14 +172,14 @@ def main():
                 "mean_error_m", "max_error_m", "p95_error_m", "notes",
             ])
         ts = datetime.now().isoformat(timespec="seconds")
-        dataset_name = os.path.basename(config.data_dir.rstrip("/\\")).lower()
+        dataset_name = os.path.basename(config.data.dir.rstrip("/\\")).lower()
         for name, r in all_results.items():
             writer.writerow([
-                run_id, ts, config.model_type, dataset_name,
-                config.data_fraction, config.epochs,
+                run_id, ts, config.model.type, dataset_name,
+                config.data.fraction, config.training.epochs,
                 name, r["n_comms"], r["n_steps"], f"{r['comm_ratio']:.4f}",
                 f"{r['mean_error']:.2f}", f"{r['max_error']:.2f}", f"{r['p95_error']:.2f}",
-                config.note,
+                config.output.note,
             ])
     print(f"Appended {len(all_results)} rows to {csv_path}")
 
