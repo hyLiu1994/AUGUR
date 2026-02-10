@@ -145,14 +145,27 @@ def save_config(config: ExperimentConfig, path: str):
         yaml.dump(d, f, default_flow_style=False, sort_keys=False)
 
 
+def _needs_model_for_strategies(config: ExperimentConfig) -> bool:
+    """Check if any selected strategy requires a trained model."""
+    NO_MODEL = {"dead_reckoning", "kalman_dps"}
+    selected = config.strategies_list
+    if selected is None:
+        return True
+    return any(s not in NO_MODEL for s in selected)
+
+
 def create_run_dir(config: ExperimentConfig) -> str:
     """Create timestamped results directory for this run.
 
     Format: {timestamp}_{model}_{strategies}[_{note}]
-    Example: 20260210_160648_mdn_dead_reckoning_pronorm
+    When all strategies are model-free: {timestamp}_{strategies}[_{note}]
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    parts = [timestamp, config.model_type]
+    parts = [timestamp]
+
+    # Only include model type when model is actually used
+    if _needs_model_for_strategies(config):
+        parts.append(config.model_type)
 
     # Add strategy names
     selected = config.strategies_list

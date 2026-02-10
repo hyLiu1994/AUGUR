@@ -2,9 +2,9 @@
 AUGUR main experiment runner.
 
 Usage:
-    python experiments/run_experiment.py --config configs/geolife_mdn.yaml
-    python experiments/run_experiment.py --config configs/geolife_mdn.yaml --data_fraction 0.1
-    python experiments/run_experiment.py --config configs/geolife_mdn.yaml --load_model results/.../model.pt
+    python experiments/run_experiment.py --config configs/geolife.yaml
+    python experiments/run_experiment.py --config configs/geolife.yaml --data_fraction 0.1
+    python experiments/run_experiment.py --config configs/geolife.yaml --load_model results/.../model.pt
 """
 
 import os

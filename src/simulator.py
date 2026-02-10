@@ -553,9 +553,9 @@ def run_all_strategies(model, test_trajs, stats, config, device, median_unc):
 
     # ML-based strategies
     for name, params in strategies.items():
-        if name.startswith("periodic_") or name.startswith("dead_reckoning_") or name.startswith("kalman_dps_"):
-            # periodic handled in rolling_simulate, model-free baselines handled above
-            pass
+        if name.startswith("dead_reckoning_") or name.startswith("kalman_dps_"):
+            # model-free baselines already handled above
+            continue
 
         print(f"  Running {name}...")
         total_errors, total_comms, total_steps = [], 0, 0
