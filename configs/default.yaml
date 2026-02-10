@@ -13,6 +13,7 @@ pred_len: 1
 epochs: 50
 batch_size: 256
 lr: 0.001
+ss_max: 0.5  # Scheduled Sampling: ramp ratio from 0 to ss_max over training (0=off)
 
 # Simulation
 mc_samples: 30

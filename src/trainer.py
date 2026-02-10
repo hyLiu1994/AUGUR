@@ -1,6 +1,11 @@
 """
 Model training, evaluation, and checkpoint management.
 
+Supports Scheduled Sampling: during training, some input steps are replaced
+with the model's own predictions to bridge the train-test gap. In dual
+prediction, the server's input buffer contains predicted (noisy) values
+between communications. Scheduled Sampling teaches the model to handle this.
+
 Extracted from model.py (training functions) and rolling_validation.py (training loop).
 """
 
@@ -19,11 +24,68 @@ from src.config import ExperimentConfig
 
 
 # ---------------------------------------------------------------------------
-# Training functions (moved from model.py)
+# Scheduled Sampling helper
+# ---------------------------------------------------------------------------
+
+def _get_ss_ratio(epoch: int, total_epochs: int, ss_max: float) -> float:
+    """Linearly ramp scheduled sampling ratio from 0 to ss_max."""
+    if total_epochs <= 1:
+        return 0.0
+    return ss_max * epoch / (total_epochs - 1)
+
+
+def _apply_scheduled_sampling(model, inputs, ss_ratio, model_type):
+    """
+    Replace the last step of the input with the model's own prediction.
+
+    In dual prediction, the most recent buffer entry is most likely to be a
+    model prediction (no communication happened). We simulate this by:
+    1. Forward pass on inputs[:, :-1, :] (first seq_len-1 steps)
+    2. Get the model's predicted displacement
+    3. With probability ss_ratio, replace inputs[:, -1, :] with prediction
+
+    This is efficient (one extra forward on shorter sequence) and targets
+    exactly the error pattern seen during inference.
+    """
+    if ss_ratio <= 0.0:
+        return inputs
+
+    B = inputs.shape[0]
+    # Mask: which samples in the batch get scheduled sampling
+    mask = torch.rand(B, device=inputs.device) < ss_ratio  # (B,)
+    if not mask.any():
+        return inputs
+
+    # Forward on the prefix (seq_len - 1 steps) to predict the last step
+    prefix = inputs[:, :-1, :]  # (B, seq_len-1, 2)
+
+    with torch.no_grad():
+        if model_type == "mdn":
+            pi, mu, _ = model(prefix)
+            # Mixture mean as predicted displacement
+            pi_e = pi.unsqueeze(-1)  # (B, pred_len, K, 1)
+            pred = (pi_e * mu).sum(dim=2)  # (B, pred_len, 2)
+        elif model_type == "heteroscedastic":
+            pred, _ = model(prefix)  # (B, pred_len, 2)
+        else:
+            pred = model(prefix)  # (B, pred_len, 2)
+
+    # pred[:, 0, :] is the predicted next displacement (pred_len=1)
+    pred_step = pred[:, 0, :]  # (B, 2)
+
+    # Replace last input step for masked samples
+    inputs = inputs.clone()
+    inputs[mask, -1, :] = pred_step[mask]
+
+    return inputs
+
+
+# ---------------------------------------------------------------------------
+# Training functions
 # ---------------------------------------------------------------------------
 
 def train_one_epoch(model, train_loader, optimizer, device,
-                    epoch=0, total_epochs=0):
+                    epoch=0, total_epochs=0, ss_ratio=0.0):
     """Train MSE model (TrajectoryLSTM) for one epoch."""
     model.train()
     total_loss = 0.0
@@ -35,6 +97,10 @@ def train_one_epoch(model, train_loader, optimizer, device,
     for inputs, targets in pbar:
         inputs = inputs.to(device)
         targets = targets.to(device)
+
+        if ss_ratio > 0:
+            inputs = _apply_scheduled_sampling(
+                model, inputs, ss_ratio, "mcdropout")
 
         optimizer.zero_grad()
         predictions = model(inputs)
@@ -50,7 +116,7 @@ def train_one_epoch(model, train_loader, optimizer, device,
 
 
 def train_one_epoch_nll(model, train_loader, optimizer, device,
-                        epoch=0, total_epochs=0):
+                        epoch=0, total_epochs=0, ss_ratio=0.0):
     """Train HeteroscedasticLSTM with Gaussian NLL loss."""
     model.train()
     total_loss = 0.0
@@ -61,6 +127,10 @@ def train_one_epoch_nll(model, train_loader, optimizer, device,
     for inputs, targets in pbar:
         inputs = inputs.to(device)
         targets = targets.to(device)
+
+        if ss_ratio > 0:
+            inputs = _apply_scheduled_sampling(
+                model, inputs, ss_ratio, "heteroscedastic")
 
         optimizer.zero_grad()
         mean, logvar = model(inputs)
@@ -76,7 +146,7 @@ def train_one_epoch_nll(model, train_loader, optimizer, device,
 
 
 def train_one_epoch_mdn(model, train_loader, optimizer, device,
-                        epoch=0, total_epochs=0):
+                        epoch=0, total_epochs=0, ss_ratio=0.0):
     """Train MDNTrajectoryLSTM with mixture NLL loss."""
     model.train()
     total_loss = 0.0
@@ -87,6 +157,10 @@ def train_one_epoch_mdn(model, train_loader, optimizer, device,
     for inputs, targets in pbar:
         inputs = inputs.to(device)
         targets = targets.to(device)
+
+        if ss_ratio > 0:
+            inputs = _apply_scheduled_sampling(
+                model, inputs, ss_ratio, "mdn")
 
         optimizer.zero_grad()
         pi, mu, logvar = model(inputs)
@@ -189,9 +263,13 @@ def train_model(
     best_val, best_state = float("inf"), None
 
     for epoch in range(config.epochs):
+        # Scheduled Sampling: ramp from 0 to ss_max over training
+        ss_ratio = _get_ss_ratio(epoch, config.epochs, config.ss_max)
+
         train_loss = train_fn(
             model, train_loader, optimizer, device,
             epoch=epoch, total_epochs=config.epochs,
+            ss_ratio=ss_ratio,
         )
         val_loss = evaluate_model(model, val_loader, device)
         scheduler.step(val_loss)
@@ -201,8 +279,9 @@ def train_model(
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
 
         lr = optimizer.param_groups[0]["lr"]
+        ss_str = f", ss={ss_ratio:.2f}" if config.ss_max > 0 else ""
         print(f"  Epoch {epoch+1}/{config.epochs}: "
-              f"train={train_loss:.6f}, val={val_loss:.6f}, lr={lr:.1e}")
+              f"train={train_loss:.6f}, val={val_loss:.6f}, lr={lr:.1e}{ss_str}")
 
     model.load_state_dict(best_state)
     model = model.to(device)

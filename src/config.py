@@ -37,6 +37,7 @@ class ExperimentConfig:
     epochs: int = 50
     batch_size: int = 256
     lr: float = 1e-3
+    ss_max: float = 0.5  # Scheduled Sampling max ratio (0 = disabled)
     load_model: Optional[str] = None
 
     # --- Simulation ---
