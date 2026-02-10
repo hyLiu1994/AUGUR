@@ -51,7 +51,7 @@ def main():
     else:
         print(f"\n=== Step 2: Train {config.model_type} model ===")
         # Prepare training data
-        all_segments = load_and_segment(config.data_dir, max_taxis=config.max_taxis, min_segment_len=20)
+        all_segments = load_and_segment(config.data_dir, min_segment_len=20)
         if config.data_fraction < 1.0:
             rng = np.random.default_rng(config.seed)
             n_seg_use = max(10, int(len(all_segments) * config.data_fraction))

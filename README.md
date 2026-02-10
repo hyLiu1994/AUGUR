@@ -79,10 +79,25 @@ python experiments/run_experiment.py --config configs/geolife_mdn.yaml \
     --load_model path/to/model.pt --data_fraction 0.1
 ```
 
+### Run specific strategies only
+```bash
+# Only baselines
+python experiments/run_experiment.py --config configs/geolife_mdn.yaml \
+    --strategies "periodic,dead_reckoning,threshold"
+
+# Only our methods
+python experiments/run_experiment.py --config configs/geolife_mdn.yaml \
+    --strategies "proactive_norm,dynamic"
+
+# Compare DR vs pronorm
+python experiments/run_experiment.py --config configs/geolife_mdn.yaml \
+    --strategies "dead_reckoning,pronorm" --epsilon_values "50,100"
+```
+
 ### Override parameters via CLI
 ```bash
 python experiments/run_experiment.py --config configs/geolife_mdn.yaml \
-    --epochs 30 --epsilon 100 --epsilon_values "50,100,200"
+    --epochs 30 --epsilon_values "50,100,200"
 ```
 
 ### Dead Reckoning only (no model needed)
@@ -98,8 +113,21 @@ python experiments/test_dead_reckoning.py
 | `data_fraction` | 1.0 | Fraction of data (0.1 = quick test) |
 | `seq_len` | 20 | Input history window |
 | `pred_len` | 1 | Prediction horizon (1-step rolling) |
-| `epsilon` | 50.0 | Error threshold (meters) |
-| `epsilon_values` | 10,20,30,50,100 | Thresholds to sweep |
+| `epsilon_values` | 10,20,30,50,100 | Error thresholds to sweep (meters) |
+| `strategies` | all | Strategies to run (see below) |
+
+### Available Strategy Groups
+
+| Name | Aliases | Type |
+|------|---------|------|
+| `periodic` | — | Baseline |
+| `dead_reckoning` | — | Baseline |
+| `threshold` | — | Baseline |
+| `proactive` | — | AUGUR |
+| `proactive_norm` | `pronorm` | AUGUR |
+| `dynamic_eps` | `dynamic` | AUGUR |
+| `unc_accum` | — | AUGUR |
+| `unc_decay` | — | AUGUR |
 
 ## Experimental Baselines (Planned)
 

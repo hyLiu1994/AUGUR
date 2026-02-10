@@ -33,7 +33,6 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", type=str, default="D:/Datasets/tdrive")
     parser.add_argument("--results_dir", type=str, default="results/budget_comparison")
-    parser.add_argument("--max_taxis", type=int, default=200)
     parser.add_argument("--seq_len", type=int, default=20)
     parser.add_argument("--pred_len", type=int, default=5)
     parser.add_argument("--epochs", type=int, default=50)
@@ -131,7 +130,6 @@ def main():
     print("\n=== Loading data ===")
     train_loader, val_loader, test_loader, stats = prepare_dataloaders(
         data_dir=args.data_dir,
-        max_taxis=args.max_taxis,
         seq_len=args.seq_len,
         pred_len=args.pred_len,
         batch_size=args.batch_size,

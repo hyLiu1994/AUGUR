@@ -3,10 +3,25 @@ import numpy as np
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from experiments.rolling_validation import prepare_long_trajectories, rolling_simulate_dead_reckoning
+from src.simulator import rolling_simulate_dead_reckoning
+from src.data_loader import load_and_segment, latlon_to_meters
 from tqdm import tqdm
 
-trajs = prepare_long_trajectories("D:/Datasets/Geolife Trajectories 1.3", max_taxis=None, min_traj_len=50)
+
+def prepare_trajs(data_dir, min_traj_len=50):
+    segments = load_and_segment(data_dir, min_segment_len=min_traj_len)
+    trajectories = []
+    for seg in segments:
+        lats = seg["latitude"].values
+        lons = seg["longitude"].values
+        x, y = latlon_to_meters(lats, lons)
+        positions = np.stack([x, y], axis=-1).astype(np.float64)
+        displacements = np.diff(positions, axis=0)
+        trajectories.append({"positions": positions, "displacements": displacements})
+    return trajectories
+
+
+trajs = prepare_trajs("D:/Datasets/Geolife Trajectories 1.3")
 
 rng = np.random.default_rng(42)
 rng.shuffle(trajs)
