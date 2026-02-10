@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Model checkpoints & results
+*.pt
+results/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environments
+.env
+.venv/
+env/
+
+# Syncthing conflicts
+*.sync-conflict-*

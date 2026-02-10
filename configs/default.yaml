@@ -1,0 +1,30 @@
+# AUGUR default experiment configuration
+# Override per-dataset in geolife_mdn.yaml, porto_mdn.yaml, etc.
+
+# Model
+model_type: mdn
+hidden_dim: 128
+n_components: 3
+dropout: 0.2
+seq_len: 20
+pred_len: 1
+
+# Training
+epochs: 50
+batch_size: 256
+lr: 0.001
+
+# Simulation
+epsilon: 50.0
+mc_samples: 30
+epsilon_values: "10,20,30,50,100"
+
+# Data
+data_fraction: 1.0
+min_traj_len: 50
+max_test_trajs: 500
+
+# Output
+results_dir: results
+csv_log: results/experiment_log.csv
+seed: 42
