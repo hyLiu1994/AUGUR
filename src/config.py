@@ -23,6 +23,7 @@ class ExperimentConfig:
     dataset_type: Optional[str] = None  # auto-detect if None
     data_fraction: float = 1.0
     min_traj_len: int = 50
+    max_traj_len: int = 200
     max_test_trajs: int = 500
 
     # --- Model ---
@@ -145,13 +146,25 @@ def save_config(config: ExperimentConfig, path: str):
 
 
 def create_run_dir(config: ExperimentConfig) -> str:
-    """Create timestamped results directory for this run."""
+    """Create timestamped results directory for this run.
+
+    Format: {timestamp}_{model}_{strategies}[_{note}]
+    Example: 20260210_160648_mdn_dead_reckoning_pronorm
+    """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     parts = [timestamp, config.model_type]
+
+    # Add strategy names
+    selected = config.strategies_list
+    if selected is None:
+        parts.append("all")
+    else:
+        parts.append("_".join(selected))
+
     if config.note:
-        # sanitize note for directory name
         safe_note = config.note.replace(" ", "_").replace("/", "_")[:30]
         parts.append(safe_note)
+
     run_name = "_".join(parts)
     run_dir = os.path.join(config.results_dir, run_name)
     os.makedirs(run_dir, exist_ok=True)

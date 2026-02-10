@@ -30,6 +30,8 @@ def prepare_long_trajectories(config: ExperimentConfig):
         min_segment_len=config.min_traj_len,
     )
 
+    max_len = config.max_traj_len
+
     trajectories = []
     for seg in segments:
         lats = seg["latitude"].values
@@ -37,12 +39,17 @@ def prepare_long_trajectories(config: ExperimentConfig):
         x, y = latlon_to_meters(lats, lons)
 
         positions = np.stack([x, y], axis=-1).astype(np.float64)
-        displacements = np.diff(positions, axis=0)
 
-        trajectories.append({
-            "positions": positions,
-            "displacements": displacements,
-        })
+        # Split long trajectories into sub-trajectories of max_len
+        for start in range(0, len(positions), max_len):
+            sub_pos = positions[start : start + max_len]
+            if len(sub_pos) < config.min_traj_len:
+                break  # tail too short, discard
+            sub_disp = np.diff(sub_pos, axis=0)
+            trajectories.append({
+                "positions": sub_pos,
+                "displacements": sub_disp,
+            })
 
     print(f"Prepared {len(trajectories)} long trajectories")
     if trajectories:
