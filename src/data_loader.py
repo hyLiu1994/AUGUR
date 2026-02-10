@@ -46,20 +46,17 @@ BOUNDS = {
 BEIJING_BOUNDS = BOUNDS["beijing_wide"]
 
 
-def load_tdrive_raw(data_dir: str, max_taxis: Optional[int] = None) -> pd.DataFrame:
+def load_tdrive_raw(data_dir: str) -> pd.DataFrame:
     """
     Load raw T-Drive trajectory files into a single DataFrame.
 
     Args:
         data_dir: Path to directory containing .txt files
-        max_taxis: If set, only load this many taxi files (for quick testing)
 
     Returns:
         DataFrame with columns: [taxi_id, timestamp, longitude, latitude]
     """
     txt_files = sorted(glob.glob(os.path.join(data_dir, "*.txt")))
-    if max_taxis is not None:
-        txt_files = txt_files[:max_taxis]
 
     dfs = []
     for f in txt_files:
@@ -79,7 +76,7 @@ def load_tdrive_raw(data_dir: str, max_taxis: Optional[int] = None) -> pd.DataFr
     return data
 
 
-def load_geolife_raw(data_dir: str, max_users: Optional[int] = None) -> pd.DataFrame:
+def load_geolife_raw(data_dir: str) -> pd.DataFrame:
     """
     Load raw GeoLife trajectory files into a single DataFrame.
 
@@ -91,7 +88,6 @@ def load_geolife_raw(data_dir: str, max_users: Optional[int] = None) -> pd.DataF
 
     Args:
         data_dir: Path to GeoLife root (containing Data/ folder)
-        max_users: If set, only load this many users (for quick testing)
 
     Returns:
         DataFrame with columns: [taxi_id, timestamp, longitude, latitude]
@@ -103,8 +99,6 @@ def load_geolife_raw(data_dir: str, max_users: Optional[int] = None) -> pd.DataF
 
     user_dirs = sorted([d for d in os.listdir(data_root)
                         if os.path.isdir(os.path.join(data_root, d))])
-    if max_users is not None:
-        user_dirs = user_dirs[:max_users]
 
     dfs = []
     n_files = 0
@@ -136,7 +130,7 @@ def load_geolife_raw(data_dir: str, max_users: Optional[int] = None) -> pd.DataF
     return data
 
 
-def load_porto_raw(data_dir: str, max_taxis: Optional[int] = None) -> pd.DataFrame:
+def load_porto_raw(data_dir: str) -> pd.DataFrame:
     """
     Load Porto Taxi dataset (ECML/PKDD 2015).
 
@@ -145,7 +139,6 @@ def load_porto_raw(data_dir: str, max_taxis: Optional[int] = None) -> pd.DataFra
 
     Args:
         data_dir: Path to directory containing train.csv
-        max_taxis: If set, only load trips from this many unique taxis
 
     Returns:
         DataFrame with columns: [taxi_id, timestamp, longitude, latitude]
@@ -162,11 +155,6 @@ def load_porto_raw(data_dir: str, max_taxis: Optional[int] = None) -> pd.DataFra
     # Filter out trips with missing data or empty polylines
     df_raw = df_raw[df_raw["MISSING_DATA"] == False]  # noqa: E712
     df_raw = df_raw[df_raw["POLYLINE"].str.len() > 4]  # skip "[]" and empty
-
-    # Optional: limit taxis
-    if max_taxis is not None:
-        unique_taxis = df_raw["TAXI_ID"].unique()[:max_taxis]
-        df_raw = df_raw[df_raw["TAXI_ID"].isin(unique_taxis)]
 
     print(f"  Parsing {len(df_raw)} trips...")
 
@@ -209,7 +197,7 @@ def load_porto_raw(data_dir: str, max_taxis: Optional[int] = None) -> pd.DataFra
     return data
 
 
-def load_didi_raw(data_dir: str, max_taxis: Optional[int] = None) -> pd.DataFrame:
+def load_didi_raw(data_dir: str) -> pd.DataFrame:
     """
     Load DiDi Chengdu GAIA dataset.
 
@@ -220,7 +208,6 @@ def load_didi_raw(data_dir: str, max_taxis: Optional[int] = None) -> pd.DataFram
 
     Args:
         data_dir: Path to directory containing CSV files
-        max_taxis: If set, only load data from this many unique drivers
 
     Returns:
         DataFrame with columns: [taxi_id, timestamp, longitude, latitude]
@@ -249,10 +236,6 @@ def load_didi_raw(data_dir: str, max_taxis: Optional[int] = None) -> pd.DataFram
             continue
 
     data = pd.concat(dfs, ignore_index=True)
-
-    if max_taxis is not None:
-        unique_ids = data["taxi_id"].unique()[:max_taxis]
-        data = data[data["taxi_id"].isin(unique_ids)]
 
     print(f"Loaded {len(csv_files)} files, {len(data)} GPS points")
     return data
@@ -377,13 +360,13 @@ def segment_trajectories(
     return segments
 
 
-def _cache_path(data_dir: str, max_taxis: Optional[int], max_gap: int,
+def _cache_path(data_dir: str, max_gap: int,
                 min_seg: int, max_speed: float, bounds: Optional[dict] = None) -> str:
     """Generate a deterministic cache file path based on processing parameters."""
     bounds_str = ""
     if bounds:
         bounds_str = f"|{bounds['lon_min']},{bounds['lon_max']},{bounds['lat_min']},{bounds['lat_max']}"
-    key = f"{data_dir}|{max_taxis}|{max_gap}|{min_seg}|{max_speed:.1f}{bounds_str}"
+    key = f"{data_dir}|{max_gap}|{min_seg}|{max_speed:.1f}{bounds_str}"
     h = hashlib.md5(key.encode()).hexdigest()[:12]
     cache_dir = os.path.join(data_dir, ".cache")
     os.makedirs(cache_dir, exist_ok=True)
@@ -469,7 +452,6 @@ DATASET_DEFAULTS = {
 
 def load_and_segment(
     data_dir: str,
-    max_taxis: Optional[int] = None,
     max_gap_seconds: Optional[int] = None,
     min_segment_len: Optional[int] = None,
     max_speed_mps: Optional[float] = None,
@@ -498,7 +480,7 @@ def load_and_segment(
         max_speed_mps = defaults["max_speed_mps"]
 
     bounds = defaults.get("bounds", BEIJING_BOUNDS)
-    cp = _cache_path(data_dir, max_taxis, max_gap_seconds, min_segment_len, max_speed_mps, bounds)
+    cp = _cache_path(data_dir, max_gap_seconds, min_segment_len, max_speed_mps, bounds)
 
     if use_cache and os.path.exists(cp):
         print(f"Loading cached segments from {cp}")
@@ -513,10 +495,10 @@ def load_and_segment(
 
     # Load raw data based on dataset type
     _loaders = {
-        "geolife": lambda: load_geolife_raw(data_dir, max_users=max_taxis),
-        "porto": lambda: load_porto_raw(data_dir, max_taxis=max_taxis),
-        "didi": lambda: load_didi_raw(data_dir, max_taxis=max_taxis),
-        "tdrive": lambda: load_tdrive_raw(data_dir, max_taxis=max_taxis),
+        "geolife": lambda: load_geolife_raw(data_dir),
+        "porto": lambda: load_porto_raw(data_dir),
+        "didi": lambda: load_didi_raw(data_dir),
+        "tdrive": lambda: load_tdrive_raw(data_dir),
     }
     if dataset_type not in _loaders:
         raise ValueError(f"Unknown dataset type: {dataset_type}. Supported: {list(_loaders.keys())}")
@@ -644,7 +626,6 @@ class TrajectoryDataset(Dataset):
 
 def prepare_dataloaders(
     data_dir: str,
-    max_taxis: Optional[int] = None,
     seq_len: int = 20,
     pred_len: int = 5,
     batch_size: int = 256,
@@ -658,7 +639,7 @@ def prepare_dataloaders(
         train_loader, val_loader, test_loader, stats (for denormalization)
     """
     # Load and preprocess (with caching)
-    segments = load_and_segment(data_dir, max_taxis=max_taxis)
+    segments = load_and_segment(data_dir)
     inputs, targets, stats = create_sequences(segments, seq_len=seq_len, pred_len=pred_len)
 
     # Split

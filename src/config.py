@@ -21,7 +21,6 @@ class ExperimentConfig:
     # --- Data ---
     data_dir: str = ""
     dataset_type: Optional[str] = None  # auto-detect if None
-    max_taxis: Optional[int] = None
     data_fraction: float = 1.0
     min_traj_len: int = 50
     max_test_trajs: int = 500
@@ -41,10 +40,9 @@ class ExperimentConfig:
     load_model: Optional[str] = None
 
     # --- Simulation ---
-    epsilon: float = 50.0
     mc_samples: int = 30
-    skip_baselines: bool = False
     epsilon_values: str = "10,20,30,50,100"  # comma-separated
+    strategies: str = "all"  # comma-separated, e.g. "dead_reckoning,proactive_norm" or "all"
 
     # --- Output ---
     results_dir: str = "results"
@@ -55,6 +53,12 @@ class ExperimentConfig:
     @property
     def epsilon_list(self):
         return [float(x) for x in self.epsilon_values.split(",")]
+
+    @property
+    def strategies_list(self):
+        if self.strategies.strip().lower() == "all":
+            return None  # None means run all
+        return [s.strip() for s in self.strategies.split(",")]
 
 
 def load_config(yaml_path: Optional[str] = None, cli_args: Optional[list] = None) -> ExperimentConfig:

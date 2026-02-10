@@ -27,7 +27,6 @@ def prepare_long_trajectories(config: ExperimentConfig):
     """
     segments = load_and_segment(
         config.data_dir,
-        max_taxis=config.max_taxis,
         min_segment_len=config.min_traj_len,
     )
 
@@ -154,7 +153,7 @@ def rolling_simulate(
     T = len(positions)
     seq_len = config.seq_len
     mc_samples = config.mc_samples
-    run_epsilon = epsilon_override if epsilon_override is not None else config.epsilon
+    run_epsilon = epsilon_override if epsilon_override is not None else config.epsilon_list[0]
 
     # Determine if we need uncertainty for this strategy
     is_periodic = strategy_name.startswith("periodic_")
@@ -302,40 +301,86 @@ def profile_uncertainty(model, train_trajs, stats, config, device, n_trajs=30):
 # Run all strategies
 # ---------------------------------------------------------------------------
 
+def _want(selected, prefix):
+    """Check if a strategy group should run based on --strategies filter."""
+    if selected is None:  # "all"
+        return True
+    return any(s == prefix or s.startswith(prefix) for s in selected)
+
+
 def build_strategy_configs(config: ExperimentConfig, median_unc: float):
-    """Build the strategy parameter dict for all strategies to run."""
+    """
+    Build the strategy parameter dict for all strategies to run.
+
+    Respects config.strategies_list:
+        "all"                              → everything
+        "dead_reckoning,proactive_norm"    → only those two groups
+        "threshold,pronorm"               → threshold + pronorm (alias for proactive_norm)
+
+    Strategy group names:
+        periodic, dead_reckoning, threshold,
+        proactive, proactive_norm (alias: pronorm),
+        dynamic_eps (alias: dynamic),
+        unc_accum, unc_decay
+    """
+    selected = config.strategies_list  # None means all
     strategies = {}
 
-    if not config.skip_baselines:
-        # Periodic baselines
+    # Periodic baselines
+    if _want(selected, "periodic"):
         for period in [5, 10, 20]:
             strategies[f"periodic_{period}"] = {
                 "strategy_name": f"periodic_{period}",
             }
-        # Dead Reckoning (handled separately, no ML model)
-        # Threshold baselines
+
+    # Threshold baselines
+    if _want(selected, "threshold"):
         for eps in config.epsilon_list:
             strategies[f"threshold_{eps:.0f}m"] = {
                 "strategy_name": "threshold",
                 "epsilon_override": eps,
             }
 
-    # Proactive strategies
-    for eps in config.epsilon_list:
-        if not config.skip_baselines:
+    # Proactive
+    if _want(selected, "proactive"):
+        for eps in config.epsilon_list:
             strategies[f"proactive_{eps:.0f}m"] = {
                 "strategy_name": "proactive",
                 "epsilon_override": eps,
             }
+
+    # Proactive Normalized (accept both "proactive_norm" and "pronorm")
+    if _want(selected, "proactive_norm") or _want(selected, "pronorm"):
+        for eps in config.epsilon_list:
             strategies[f"pronorm_{eps:.0f}m"] = {
                 "strategy_name": "proactive_norm",
                 "epsilon_override": eps,
             }
-        strategies[f"dynamic_{eps:.0f}m"] = {
-            "strategy_name": "dynamic_eps",
-            "epsilon_override": eps,
-            "median_unc": median_unc,
-        }
+
+    # Dynamic epsilon (accept both "dynamic_eps" and "dynamic")
+    if _want(selected, "dynamic_eps") or _want(selected, "dynamic"):
+        for eps in config.epsilon_list:
+            strategies[f"dynamic_{eps:.0f}m"] = {
+                "strategy_name": "dynamic_eps",
+                "epsilon_override": eps,
+                "median_unc": median_unc,
+            }
+
+    # Uncertainty accumulation
+    if _want(selected, "unc_accum"):
+        for eps in config.epsilon_list:
+            strategies[f"unc_accum_{eps:.0f}m"] = {
+                "strategy_name": "unc_accum",
+                "epsilon_override": eps,
+            }
+
+    # Uncertainty decay
+    if _want(selected, "unc_decay"):
+        for eps in config.epsilon_list:
+            strategies[f"unc_decay_{eps:.0f}m"] = {
+                "strategy_name": "unc_decay",
+                "epsilon_override": eps,
+            }
 
     return strategies
 
@@ -347,7 +392,7 @@ def run_all_strategies(model, test_trajs, stats, config, device, median_unc):
     all_results = {}
 
     # Dead Reckoning baselines (no ML model)
-    if not config.skip_baselines:
+    if _want(config.strategies_list, "dead_reckoning"):
         for eps in config.epsilon_list:
             dr_name = f"dead_reckoning_{eps:.0f}m"
             print(f"  Running {dr_name}...")

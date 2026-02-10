@@ -15,7 +15,6 @@ batch_size: 256
 lr: 0.001
 
 # Simulation
-epsilon: 50.0
 mc_samples: 30
 epsilon_values: "10,20,30,50,100"
 
