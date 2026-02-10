@@ -11,9 +11,9 @@ Traditional MOD methods are **reactive**: they wait until prediction error excee
 ```
 Code Repository/
 ├── configs/
-│   ├── default.yaml            # Default hyperparameters
-│   ├── geolife_mdn.yaml        # GeoLife + MDN config
-│   └── porto_mdn.yaml          # Porto + MDN config
+│   ├── default.yaml            # Default hyperparameters (model, training, etc.)
+│   ├── geolife.yaml            # GeoLife dataset config
+│   └── porto.yaml              # Porto dataset config
 ├── src/
 │   ├── config.py               # ExperimentConfig dataclass + YAML loading
 │   ├── data_loader.py           # Multi-dataset: GeoLife, Porto, DiDi, T-Drive
@@ -69,39 +69,39 @@ pip install -r requirements.txt
 
 ### Full experiment (train + simulate all strategies)
 ```bash
-python experiments/run_experiment.py --config configs/geolife_mdn.yaml
+python experiments/run_experiment.py --config configs/geolife.yaml
 ```
 
 ### Load existing model
 ```bash
-python experiments/run_experiment.py --config configs/geolife_mdn.yaml \
+python experiments/run_experiment.py --config configs/geolife.yaml \
     --load_model path/to/model.pt --data_fraction 0.1
 ```
 
 ### Run specific strategies only
 ```bash
 # Only baselines
-python experiments/run_experiment.py --config configs/geolife_mdn.yaml \
+python experiments/run_experiment.py --config configs/geolife.yaml \
     --strategies "periodic,dead_reckoning,threshold"
 
 # Only our methods
-python experiments/run_experiment.py --config configs/geolife_mdn.yaml \
+python experiments/run_experiment.py --config configs/geolife.yaml \
     --strategies "proactive_norm,dynamic"
 
 # Compare DR vs pronorm
-python experiments/run_experiment.py --config configs/geolife_mdn.yaml \
+python experiments/run_experiment.py --config configs/geolife.yaml \
     --strategies "dead_reckoning,pronorm" --epsilon_values "50,100"
 ```
 
 ### Override parameters via CLI
 ```bash
-python experiments/run_experiment.py --config configs/geolife_mdn.yaml \
+python experiments/run_experiment.py --config configs/geolife.yaml \
     --epochs 30 --epsilon_values "50,100,200"
 ```
 
 ### Dead Reckoning only (no model needed, auto-skips training)
 ```bash
-python experiments/run_experiment.py --config configs/geolife_mdn.yaml \
+python experiments/run_experiment.py --config configs/geolife.yaml \
     --strategies "dead_reckoning"
 ```
 

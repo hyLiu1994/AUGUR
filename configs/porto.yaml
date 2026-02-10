@@ -1,5 +1,4 @@
 _base_: default.yaml
 
 data_dir: ~/Datasets/Porto
-model_type: mdn
-note: porto_mdn
+note: porto
