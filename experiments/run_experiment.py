@@ -30,7 +30,7 @@ from src.evaluate import print_comparison_table, plot_pareto, plot_uncertainty_v
 
 def _needs_model(config):
     """Check if any selected strategy requires a trained model."""
-    NO_MODEL = {"dead_reckoning"}
+    NO_MODEL = {"dead_reckoning", "kalman_dps"}
     selected = config.strategies_list
     if selected is None:  # "all"
         return True

@@ -122,6 +122,7 @@ python experiments/run_experiment.py --config configs/geolife_mdn.yaml \
 |------|---------|------|
 | `periodic` | — | Baseline |
 | `dead_reckoning` | — | Baseline |
+| `kalman_dps` | — | Baseline |
 | `threshold` | — | Baseline |
 | `proactive` | — | AUGUR |
 | `proactive_norm` | `pronorm` | AUGUR |
@@ -138,13 +139,13 @@ python experiments/run_experiment.py --config configs/geolife_mdn.yaml \
 | Threshold (LSTM) | Dual Prediction | ✅ Implemented |
 | Chen STSR | Safe Region | 🔧 TODO |
 | GRTS (Lange) | Tracking Protocol | 🔧 TODO |
-| Kalman DPS | Dual Prediction | 🔧 TODO |
+| Kalman DPS | Dual Prediction | ✅ Implemented |
 | LSTM-DPS (no unc) | Dual Prediction | ✅ = Threshold |
 | U-OTPC | Uncertainty-driven | 🔧 TODO |
 
 ## Known Issues
 
-- **Error compounding in LSTM dual prediction**: server's input buffer accumulates prediction errors between communications. On communication, only the current step is corrected but the preceding seq_len-1 steps remain polluted. This causes LSTM threshold to communicate *more* than Dead Reckoning at the same ε. Buffer correction strategy TBD.
+- **Error compounding in LSTM dual prediction**: server's input buffer accumulates prediction errors between communications. On communication, only the current step is corrected but the preceding seq_len-1 steps remain polluted. This causes LSTM threshold to communicate *more* than Dead Reckoning at the same ε. Mitigation: Scheduled Sampling during training (`ss_max` parameter).
 
 ## Citation
 

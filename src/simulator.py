@@ -141,6 +141,127 @@ def rolling_simulate_dead_reckoning(trajectory, epsilon):
 
 
 # ---------------------------------------------------------------------------
+# Kalman Filter DPS baseline (no ML model)
+# ---------------------------------------------------------------------------
+
+def rolling_simulate_kalman_dps(trajectory, epsilon):
+    """
+    Kalman Filter Dual Prediction Scheme.
+
+    Both client and server maintain identical Kalman filters.
+    State: [px, py, vx, vy] — constant velocity model.
+    Client observes true positions; server only gets updates on communication.
+
+    Advantage over DR: Kalman smooths noisy observations and maintains
+    uncertainty (P matrix), giving more stable velocity estimates.
+    """
+    positions = trajectory["positions"]
+    T = len(positions)
+
+    # --- Kalman Filter setup (constant velocity model) ---
+    # State: [px, py, vx, vy]
+    dt = 1.0  # unit time step
+
+    # State transition matrix
+    F = np.array([
+        [1, 0, dt, 0],
+        [0, 1, 0, dt],
+        [0, 0, 1,  0],
+        [0, 0, 0,  1],
+    ], dtype=np.float64)
+
+    # Observation matrix (only observe position)
+    H = np.array([
+        [1, 0, 0, 0],
+        [0, 1, 0, 0],
+    ], dtype=np.float64)
+
+    # Process noise (acceleration uncertainty)
+    q = 1.0  # process noise magnitude
+    Q = np.array([
+        [dt**3/3, 0,       dt**2/2, 0      ],
+        [0,       dt**3/3, 0,       dt**2/2],
+        [dt**2/2, 0,       dt,      0      ],
+        [0,       dt**2/2, 0,       dt     ],
+    ], dtype=np.float64) * q
+
+    # Measurement noise
+    R = np.eye(2, dtype=np.float64) * 10.0  # 10 m^2
+
+    # --- Initialize client and server KFs identically ---
+    x_client = np.array([positions[0, 0], positions[0, 1], 0.0, 0.0])
+    P_client = np.eye(4, dtype=np.float64) * 100.0
+
+    x_server = x_client.copy()
+    P_server = P_client.copy()
+
+    # Initialize velocity from first two points
+    if T > 1:
+        v_init = positions[1] - positions[0]
+        x_client[2:] = v_init
+        x_server[2:] = v_init
+
+    server_positions = np.zeros_like(positions)
+    server_positions[0] = positions[0].copy()
+    comm_indices = []
+    pred_errors = np.zeros(T)
+
+    for t in range(1, T):
+        # --- Predict step (both client and server) ---
+        x_client_pred = F @ x_client
+        P_client_pred = F @ P_client @ F.T + Q
+
+        x_server_pred = F @ x_server
+        P_server_pred = F @ P_server @ F.T + Q
+
+        # --- Client update (always observes true position) ---
+        z = positions[t]  # true observation
+        y_client = z - H @ x_client_pred  # innovation
+        S_client = H @ P_client_pred @ H.T + R
+        K_client = P_client_pred @ H.T @ np.linalg.inv(S_client)
+        x_client = x_client_pred + K_client @ y_client
+        P_client = (np.eye(4) - K_client @ H) @ P_client_pred
+
+        # --- Server prediction (no observation yet) ---
+        server_pos_pred = x_server_pred[:2]
+        server_positions[t] = server_pos_pred
+
+        # --- Communication decision ---
+        true_pos = positions[t]
+        pred_error = np.sqrt(((true_pos - server_pos_pred) ** 2).sum())
+        pred_errors[t] = pred_error
+
+        if pred_error > epsilon:
+            # Communicate: server gets true position, does KF update
+            y_server = z - H @ x_server_pred
+            S_server = H @ P_server_pred @ H.T + R
+            K_server = P_server_pred @ H.T @ np.linalg.inv(S_server)
+            x_server = x_server_pred + K_server @ y_server
+            P_server = (np.eye(4) - K_server @ H) @ P_server_pred
+
+            server_positions[t] = true_pos.copy()
+            comm_indices.append(t)
+        else:
+            # No communication: server keeps prediction
+            x_server = x_server_pred
+            P_server = P_server_pred
+
+    errors = np.sqrt(((positions - server_positions) ** 2).sum(axis=-1))
+
+    return {
+        "errors": errors,
+        "comm_indices": comm_indices,
+        "n_comms": len(comm_indices),
+        "n_steps": T,
+        "mean_error": errors.mean(),
+        "max_error": errors.max(),
+        "p95_error": np.percentile(errors, 95),
+        "uncertainties": np.zeros(T),
+        "pred_errors": pred_errors,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Core rolling simulation (ML-based strategies)
 # ---------------------------------------------------------------------------
 
@@ -398,35 +519,42 @@ def run_all_strategies(model, test_trajs, stats, config, device, median_unc):
 
     all_results = {}
 
-    # Dead Reckoning baselines (no ML model)
-    if _want(config.strategies_list, "dead_reckoning"):
+    # Model-free baselines
+    _MODEL_FREE = {
+        "dead_reckoning": rolling_simulate_dead_reckoning,
+        "kalman_dps": rolling_simulate_kalman_dps,
+    }
+
+    for baseline_name, simulate_fn in _MODEL_FREE.items():
+        if not _want(config.strategies_list, baseline_name):
+            continue
         for eps in config.epsilon_list:
-            dr_name = f"dead_reckoning_{eps:.0f}m"
-            print(f"  Running {dr_name}...")
-            dr_errors, dr_comms, dr_steps = [], 0, 0
+            result_name = f"{baseline_name}_{eps:.0f}m"
+            print(f"  Running {result_name}...")
+            bl_errors, bl_comms, bl_steps = [], 0, 0
 
-            for traj in tqdm(test_trajs, desc=f"    {dr_name}", leave=False):
-                dr_result = rolling_simulate_dead_reckoning(traj, epsilon=eps)
-                dr_errors.append(dr_result["errors"])
-                dr_comms += dr_result["n_comms"]
-                dr_steps += dr_result["n_steps"]
+            for traj in tqdm(test_trajs, desc=f"    {result_name}", leave=False):
+                bl_result = simulate_fn(traj, epsilon=eps)
+                bl_errors.append(bl_result["errors"])
+                bl_comms += bl_result["n_comms"]
+                bl_steps += bl_result["n_steps"]
 
-            dr_all_errors = np.concatenate(dr_errors)
-            all_results[dr_name] = {
-                "n_comms": dr_comms,
-                "n_steps": dr_steps,
-                "comm_ratio": dr_comms / dr_steps,
-                "mean_error": float(dr_all_errors.mean()),
-                "max_error": float(dr_all_errors.max()),
-                "p95_error": float(np.percentile(dr_all_errors, 95)),
+            bl_all_errors = np.concatenate(bl_errors)
+            all_results[result_name] = {
+                "n_comms": bl_comms,
+                "n_steps": bl_steps,
+                "comm_ratio": bl_comms / bl_steps,
+                "mean_error": float(bl_all_errors.mean()),
+                "max_error": float(bl_all_errors.max()),
+                "p95_error": float(np.percentile(bl_all_errors, 95)),
                 "uncertainties": np.zeros(1),
                 "pred_errors": np.zeros(1),
             }
 
     # ML-based strategies
     for name, params in strategies.items():
-        if name.startswith("periodic_") or name.startswith("dead_reckoning_"):
-            # periodic is handled in rolling_simulate, DR handled above
+        if name.startswith("periodic_") or name.startswith("dead_reckoning_") or name.startswith("kalman_dps_"):
+            # periodic handled in rolling_simulate, model-free baselines handled above
             pass
 
         print(f"  Running {name}...")
