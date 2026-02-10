@@ -102,7 +102,8 @@ def load_geolife_raw(data_dir: str) -> pd.DataFrame:
 
     dfs = []
     n_files = 0
-    for user_id in user_dirs:
+    from tqdm import tqdm
+    for user_id in tqdm(user_dirs, desc="Loading GeoLife users"):
         traj_dir = os.path.join(data_root, user_id, "Trajectory")
         if not os.path.isdir(traj_dir):
             continue
@@ -165,8 +166,10 @@ def load_porto_raw(data_dir: str) -> pd.DataFrame:
     all_lats = []
     n_trips = 0
 
-    for taxi_id, timestamp, polyline_str in zip(
-        df_raw["TAXI_ID"].values, df_raw["TIMESTAMP"].values, df_raw["POLYLINE"].values
+    from tqdm import tqdm
+    for taxi_id, timestamp, polyline_str in tqdm(
+        zip(df_raw["TAXI_ID"].values, df_raw["TIMESTAMP"].values, df_raw["POLYLINE"].values),
+        total=len(df_raw), desc="Parsing Porto trips",
     ):
         try:
             polyline = json.loads(polyline_str)
