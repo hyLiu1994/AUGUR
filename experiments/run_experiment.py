@@ -28,6 +28,15 @@ from src.strategies import CommunicationResult
 from src.evaluate import print_comparison_table, plot_pareto, plot_uncertainty_vs_error
 
 
+def _needs_model(config):
+    """Check if any selected strategy requires a trained model."""
+    NO_MODEL = {"dead_reckoning", "periodic"}
+    selected = config.strategies_list
+    if selected is None:  # "all"
+        return True
+    return any(s not in NO_MODEL for s in selected)
+
+
 def main():
     config = load_config()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -44,8 +53,13 @@ def main():
     trajectories = prepare_long_trajectories(config)
     train_trajs, test_trajs = split_trajectories(trajectories, config)
 
-    # === Step 2: Load or train model ===
-    if config.load_model:
+    needs_model = _needs_model(config)
+    model, stats, median_unc = None, None, 0.0
+
+    # === Step 2: Load or train model (skip if only model-free strategies) ===
+    if not needs_model:
+        print("\n=== Step 2: Skipped (no model needed for selected strategies) ===")
+    elif config.load_model:
         print(f"\n=== Step 2: Loading model from {config.load_model} ===")
         model, stats = load_checkpoint(config, config.load_model, device)
     else:
@@ -86,7 +100,10 @@ def main():
         torch.save(ckpt, ckpt_path)
 
     # === Step 3: Profile uncertainty ===
-    median_unc = profile_uncertainty(model, train_trajs, stats, config, device)
+    if needs_model:
+        median_unc = profile_uncertainty(model, train_trajs, stats, config, device)
+    else:
+        print("\n=== Step 3: Skipped (no model) ===")
 
     # === Step 4: Simulate ===
     print(f"\n=== Step 4: Rolling simulation on {len(test_trajs)} test trajectories ===")
@@ -131,7 +148,7 @@ def main():
         "timestamp": datetime.now().isoformat(),
         "run_dir": run_dir,
         "config": {k: v for k, v in vars(config).items()},
-        "stats": {"mean": stats["mean"].tolist(), "std": stats["std"].tolist()},
+        "stats": {"mean": stats["mean"].tolist(), "std": stats["std"].tolist()} if stats else None,
         "results": {
             name: {k: v for k, v in r.items() if k not in ("uncertainties", "pred_errors")}
             for name, r in all_results.items()

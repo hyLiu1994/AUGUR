@@ -23,8 +23,7 @@ Code Repository/
 │   ├── simulator.py             # Rolling dual-prediction simulation engine
 │   └── evaluate.py              # Metrics, Pareto plots, calibration plots
 ├── experiments/
-│   ├── run_experiment.py        # Main experiment entry point
-│   └── test_dead_reckoning.py   # Dead Reckoning baseline (standalone)
+│   └── run_experiment.py        # Main experiment entry point
 ├── results/{timestamp}_{model}/ # Versioned experiment outputs
 └── README.md
 ```
@@ -100,9 +99,10 @@ python experiments/run_experiment.py --config configs/geolife_mdn.yaml \
     --epochs 30 --epsilon_values "50,100,200"
 ```
 
-### Dead Reckoning only (no model needed)
+### Dead Reckoning only (no model needed, auto-skips training)
 ```bash
-python experiments/test_dead_reckoning.py
+python experiments/run_experiment.py --config configs/geolife_mdn.yaml \
+    --strategies "dead_reckoning"
 ```
 
 ### Key Parameters (see `configs/default.yaml`)
