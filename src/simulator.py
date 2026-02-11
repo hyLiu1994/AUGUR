@@ -171,101 +171,70 @@ def rolling_simulate_grts(trajectory, epsilon):
     """
     GRTS baseline (Lange et al., VLDB Journal 2011).
 
-    Generic Remote Trajectory Simplification: combines dead reckoning
-    with online line simplification (opening window).
+    Generic Remote Trajectory Simplification with opening window.
 
-    Algorithm:
-    - Maintain an anchor point (last communicated position)
-    - At each new point, check if a single line segment from anchor
-      to current point can approximate ALL intermediate points within epsilon
-    - If yes: don't communicate, server interpolates along the line
-    - If no: communicate the PREVIOUS point as new anchor, start new segment
+    Two-pass approach:
+    Pass 1 (client-side): Opening window line simplification.
+      - Maintain anchor point. For each new point, check if line segment
+        anchor -> current fits all intermediate points within epsilon.
+      - If not, emit previous point as new anchor.
+    Pass 2 (server-side): Linear interpolation between consecutive anchors.
+      - Server knows the sequence of anchor points and their timestamps.
+      - Between anchors, server linearly interpolates positions.
 
-    Key difference from Dead Reckoning:
-    - DR checks single-step error only
-    - GRTS checks the entire line segment fit, achieving higher compression
-      on straight/smooth segments
+    This is equivalent to the server receiving anchor points and reconstructing
+    the trajectory via piecewise linear interpolation — the standard GRTS protocol.
     """
     positions = trajectory["positions"]
     T = len(positions)
 
-    server_positions = np.zeros_like(positions)
-    server_positions[0] = positions[0].copy()
-    comm_indices = []
-    pred_errors = np.zeros(T)
-
-    anchor_pos = positions[0].copy()  # last communicated position
-    anchor_t = 0                       # time of last communication
-    buffer_start = 0                   # start of current segment in buffer
+    # === Pass 1: Client-side opening window simplification ===
+    # Collect anchor points: (time, position)
+    anchors = [(0, positions[0].copy())]  # first point is always an anchor
+    anchor_t = 0
 
     for t in range(1, T):
-        true_pos = positions[t]
-
-        # Check if line segment anchor -> current point fits all intermediate points
+        # Check if line anchor -> current fits all intermediate points
         segment_ok = True
-        max_perp_dist = 0.0
         for k in range(anchor_t + 1, t):
-            d = _perpendicular_distance(positions[k], anchor_pos, true_pos)
-            max_perp_dist = max(max_perp_dist, d)
+            d = _perpendicular_distance(positions[k], positions[anchor_t], positions[t])
             if d > epsilon:
                 segment_ok = False
                 break
 
-        # Also check current point distance from the line anchor -> previous point
-        # (this is the DR-like check for the latest position)
-        if t > anchor_t + 1:
-            current_line_end = positions[t - 1]
-            current_dist = _perpendicular_distance(true_pos, anchor_pos, current_line_end)
-        else:
-            current_dist = np.sqrt(((true_pos - anchor_pos) ** 2).sum())
-
-        # Server interpolates: position along line from anchor to latest known direction
-        if t > anchor_t:
-            # Server linearly interpolates between anchor and projected endpoint
-            progress = (t - anchor_t)
-            if len(comm_indices) > 0 or t > 1:
-                # Use direction from anchor toward latest communicated info
-                # Between communications, server extrapolates linearly from anchor
-                if t == anchor_t + 1:
-                    server_positions[t] = anchor_pos.copy()
-                else:
-                    # Linear interpolation: server doesn't know endpoint yet,
-                    # so it extrapolates using velocity from anchor
-                    # This mimics the "dead reckoning for latest position" part of GRTS
-                    prev_pos = positions[anchor_t]
-                    if anchor_t > 0:
-                        velocity = positions[anchor_t] - positions[max(0, anchor_t - 1)]
-                    elif anchor_t == 0 and T > 1:
-                        velocity = positions[1] - positions[0]
-                    else:
-                        velocity = np.zeros(2)
-                    server_positions[t] = anchor_pos + velocity * progress
-            else:
-                server_positions[t] = anchor_pos.copy()
-
-        pred_error = np.sqrt(((true_pos - server_positions[t]) ** 2).sum())
-        pred_errors[t] = pred_error
-
         if not segment_ok:
-            # Communicate: send previous point as new anchor
-            # (the last point that still fit the segment)
-            new_anchor = positions[t - 1].copy()
-            server_positions[t - 1] = new_anchor.copy()
-            anchor_pos = new_anchor
+            # Emit previous point as new anchor
+            anchors.append((t - 1, positions[t - 1].copy()))
             anchor_t = t - 1
-            comm_indices.append(t - 1)
 
-            # Re-evaluate current point with new anchor
-            server_positions[t] = true_pos.copy()
-            # Also check if current point alone violates from new anchor
-            dist_from_new = np.sqrt(((true_pos - anchor_pos) ** 2).sum())
-            if dist_from_new > epsilon:
-                server_positions[t] = true_pos.copy()
-                anchor_pos = true_pos.copy()
-                anchor_t = t
-                comm_indices.append(t)
+    # Last point is always an anchor (trajectory endpoint)
+    if anchors[-1][0] != T - 1:
+        anchors.append((T - 1, positions[T - 1].copy()))
+
+    # === Pass 2: Server-side linear interpolation between anchors ===
+    server_positions = np.zeros_like(positions)
+    comm_indices = []
+
+    for i in range(len(anchors) - 1):
+        t_start, pos_start = anchors[i]
+        t_end, pos_end = anchors[i + 1]
+
+        if i > 0:  # first anchor is free (initial position)
+            comm_indices.append(t_start)
+
+        span = t_end - t_start
+        for t in range(t_start, t_end):
+            alpha = (t - t_start) / span if span > 0 else 0.0
+            server_positions[t] = pos_start + alpha * (pos_end - pos_start)
+
+    # Fill last anchor
+    last_t, last_pos = anchors[-1]
+    server_positions[last_t] = last_pos.copy()
+    if last_t != anchors[-2][0]:  # last anchor is a communication
+        comm_indices.append(last_t)
 
     errors = np.sqrt(((positions - server_positions) ** 2).sum(axis=-1))
+    pred_errors = errors.copy()  # for GRTS, pred_error = tracking error
 
     return {
         "errors": errors,
