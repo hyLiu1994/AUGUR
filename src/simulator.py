@@ -152,6 +152,135 @@ def rolling_simulate_dead_reckoning(trajectory, epsilon):
 
 
 # ---------------------------------------------------------------------------
+# GRTS baseline (no ML model)
+# ---------------------------------------------------------------------------
+
+def _perpendicular_distance(point, line_start, line_end):
+    """Perpendicular distance from point to line segment (line_start -> line_end)."""
+    line_vec = line_end - line_start
+    line_len_sq = (line_vec ** 2).sum()
+    if line_len_sq < 1e-12:
+        return np.sqrt(((point - line_start) ** 2).sum())
+    # Project point onto line, clamped to [0, 1]
+    t = max(0.0, min(1.0, np.dot(point - line_start, line_vec) / line_len_sq))
+    projection = line_start + t * line_vec
+    return np.sqrt(((point - projection) ** 2).sum())
+
+
+def rolling_simulate_grts(trajectory, epsilon):
+    """
+    GRTS baseline (Lange et al., VLDB Journal 2011).
+
+    Generic Remote Trajectory Simplification: combines dead reckoning
+    with online line simplification (opening window).
+
+    Algorithm:
+    - Maintain an anchor point (last communicated position)
+    - At each new point, check if a single line segment from anchor
+      to current point can approximate ALL intermediate points within epsilon
+    - If yes: don't communicate, server interpolates along the line
+    - If no: communicate the PREVIOUS point as new anchor, start new segment
+
+    Key difference from Dead Reckoning:
+    - DR checks single-step error only
+    - GRTS checks the entire line segment fit, achieving higher compression
+      on straight/smooth segments
+    """
+    positions = trajectory["positions"]
+    T = len(positions)
+
+    server_positions = np.zeros_like(positions)
+    server_positions[0] = positions[0].copy()
+    comm_indices = []
+    pred_errors = np.zeros(T)
+
+    anchor_pos = positions[0].copy()  # last communicated position
+    anchor_t = 0                       # time of last communication
+    buffer_start = 0                   # start of current segment in buffer
+
+    for t in range(1, T):
+        true_pos = positions[t]
+
+        # Check if line segment anchor -> current point fits all intermediate points
+        segment_ok = True
+        max_perp_dist = 0.0
+        for k in range(anchor_t + 1, t):
+            d = _perpendicular_distance(positions[k], anchor_pos, true_pos)
+            max_perp_dist = max(max_perp_dist, d)
+            if d > epsilon:
+                segment_ok = False
+                break
+
+        # Also check current point distance from the line anchor -> previous point
+        # (this is the DR-like check for the latest position)
+        if t > anchor_t + 1:
+            current_line_end = positions[t - 1]
+            current_dist = _perpendicular_distance(true_pos, anchor_pos, current_line_end)
+        else:
+            current_dist = np.sqrt(((true_pos - anchor_pos) ** 2).sum())
+
+        # Server interpolates: position along line from anchor to latest known direction
+        if t > anchor_t:
+            # Server linearly interpolates between anchor and projected endpoint
+            progress = (t - anchor_t)
+            if len(comm_indices) > 0 or t > 1:
+                # Use direction from anchor toward latest communicated info
+                # Between communications, server extrapolates linearly from anchor
+                if t == anchor_t + 1:
+                    server_positions[t] = anchor_pos.copy()
+                else:
+                    # Linear interpolation: server doesn't know endpoint yet,
+                    # so it extrapolates using velocity from anchor
+                    # This mimics the "dead reckoning for latest position" part of GRTS
+                    prev_pos = positions[anchor_t]
+                    if anchor_t > 0:
+                        velocity = positions[anchor_t] - positions[max(0, anchor_t - 1)]
+                    elif anchor_t == 0 and T > 1:
+                        velocity = positions[1] - positions[0]
+                    else:
+                        velocity = np.zeros(2)
+                    server_positions[t] = anchor_pos + velocity * progress
+            else:
+                server_positions[t] = anchor_pos.copy()
+
+        pred_error = np.sqrt(((true_pos - server_positions[t]) ** 2).sum())
+        pred_errors[t] = pred_error
+
+        if not segment_ok:
+            # Communicate: send previous point as new anchor
+            # (the last point that still fit the segment)
+            new_anchor = positions[t - 1].copy()
+            server_positions[t - 1] = new_anchor.copy()
+            anchor_pos = new_anchor
+            anchor_t = t - 1
+            comm_indices.append(t - 1)
+
+            # Re-evaluate current point with new anchor
+            server_positions[t] = true_pos.copy()
+            # Also check if current point alone violates from new anchor
+            dist_from_new = np.sqrt(((true_pos - anchor_pos) ** 2).sum())
+            if dist_from_new > epsilon:
+                server_positions[t] = true_pos.copy()
+                anchor_pos = true_pos.copy()
+                anchor_t = t
+                comm_indices.append(t)
+
+    errors = np.sqrt(((positions - server_positions) ** 2).sum(axis=-1))
+
+    return {
+        "errors": errors,
+        "comm_indices": comm_indices,
+        "n_comms": len(comm_indices),
+        "n_steps": T,
+        "mean_error": errors.mean(),
+        "max_error": errors.max(),
+        "p95_error": np.percentile(errors, 95),
+        "uncertainties": np.zeros(T),
+        "pred_errors": pred_errors,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Kalman Filter DPS baseline (no ML model)
 # ---------------------------------------------------------------------------
 
@@ -531,6 +660,7 @@ def run_all_strategies(model, test_trajs, stats, config, device, median_unc):
     # Model-free baselines
     _MODEL_FREE = {
         "dead_reckoning": rolling_simulate_dead_reckoning,
+        "grts": rolling_simulate_grts,
         "kalman_dps": rolling_simulate_kalman_dps,
     }
 
