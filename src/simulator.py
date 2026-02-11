@@ -69,7 +69,7 @@ def split_trajectories(trajectories, config: ExperimentConfig):
         trajectories = trajectories[:n_use]
         print(f"  Using {config.data.fraction:.0%} of data: {n_use} trajectories")
 
-    n_train = int(len(trajectories) * 0.7)
+    n_train = int(len(trajectories) * config.data.train_ratio)
     train_trajs = trajectories[:n_train]
     test_trajs = trajectories[n_train:]
 

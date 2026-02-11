@@ -3,6 +3,8 @@
 
 data:
   fraction: 1.0
+  train_ratio: 0.7
+  val_ratio: 0.15
   min_traj_len: 50
   max_traj_len: 200
   max_test_trajs: 500

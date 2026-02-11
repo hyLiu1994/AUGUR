@@ -79,7 +79,9 @@ def main():
         )
 
         n_total = len(inputs)
-        n_train_seq = int(n_total * 0.85)
+        train_r = config.data.train_ratio
+        val_r = config.data.val_ratio
+        n_train_seq = int(n_total * (train_r / (train_r + val_r)))
         rng = np.random.default_rng(config.seed)
         perm = rng.permutation(n_total)
         inputs, targets = inputs[perm], targets[perm]

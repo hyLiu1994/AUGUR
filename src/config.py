@@ -29,6 +29,8 @@ class DataConfig:
     dir: str = ""
     dataset_type: Optional[str] = None  # auto-detect if None
     fraction: float = 1.0
+    train_ratio: float = 0.7
+    val_ratio: float = 0.15
     min_traj_len: int = 50
     max_traj_len: int = 200
     max_test_trajs: int = 500
@@ -117,6 +119,8 @@ _FLAT_ALIASES = {
     "min_traj_len": "data.min_traj_len",
     "max_traj_len": "data.max_traj_len",
     "max_test_trajs": "data.max_test_trajs",
+    "train_ratio": "data.train_ratio",
+    "val_ratio": "data.val_ratio",
     # Model
     "model_type": "model.type",
     "hidden_dim": "model.hidden_dim",
