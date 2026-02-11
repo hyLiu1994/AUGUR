@@ -19,7 +19,7 @@ Code Repository/
 ├── src/
 │   ├── config.py               # Nested config: Data + Model + Training + Simulation + Output
 │   ├── data_loader.py           # Multi-dataset: GeoLife, Porto, DiDi, T-Drive
-│   ├── model.py                 # 3 models: MC Dropout, Heteroscedastic, MDN
+│   ├── model.py                 # 4 models: LSTM, LSTM_MDN, Transformer, Transformer_MDN
 │   ├── strategies.py            # Communication decision functions
 │   ├── trainer.py               # Model training, evaluation, checkpointing
 │   ├── simulator.py             # Rolling dual-prediction simulation engine
@@ -42,7 +42,7 @@ data:
   max_traj_len: 200
 
 model:
-  type: mdn                  # mcdropout | heteroscedastic | mdn
+  type: lstm_mdn             # lstm | lstm_mdn | transformer | transformer_mdn
   hidden_dim: 128
   seq_len: 20
 
@@ -64,20 +64,22 @@ seed: 42
 CLI supports **dot notation** and **flat aliases** (backward compatible):
 ```bash
 # These are equivalent:
---model.type mdn       vs  --model_type mdn
+--model.type lstm_mdn  vs  --model_type lstm_mdn
 --training.epochs 30   vs  --epochs 30
 --data.fraction 0.1    vs  --data_fraction 0.1
 ```
 
 ## Models
 
-| Model | Uncertainty | Passes | Key Feature |
-|-------|------------|--------|-------------|
-| `TrajectoryLSTM` | MC Dropout | 30 | Baseline, multiple forward passes |
-| `HeteroscedasticLSTM` | Direct variance | 1 | Aleatoric only |
-| `MDNTrajectoryLSTM` | Mixture density | 1 | Multi-modal, Law of Total Variance |
+2 backbones × 2 output heads:
 
-All share `predict_with_uncertainty() → (mean, std_per_dim)` API, shape `(B, P, 2)`.
+| Backbone \ Head | Point (MSE) | MDN (Mixture Density) |
+|-----------------|-------------|----------------------|
+| LSTM | `lstm` | `lstm_mdn` |
+| Transformer | `transformer` | `transformer_mdn` |
+
+- **Point models**: `forward(x) → (B, P, 2)`, `predict_mean(x) → (B, P, 2)`
+- **MDN models**: `forward(x) → (pi, mu, logvar)`, `predict_with_uncertainty(x) → (mean, std)` via Law of Total Variance
 
 ## Communication Strategies
 

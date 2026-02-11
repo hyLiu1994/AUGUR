@@ -5,8 +5,6 @@ Supports Scheduled Sampling: during training, some input steps are replaced
 with the model's own predictions to bridge the train-test gap. In dual
 prediction, the server's input buffer contains predicted (noisy) values
 between communications. Scheduled Sampling teaches the model to handle this.
-
-Extracted from model.py (training functions) and rolling_validation.py (training loop).
 """
 
 import os
@@ -16,10 +14,7 @@ import numpy as np
 from typing import Tuple
 from tqdm import tqdm
 
-from src.model import (
-    TrajectoryLSTM, HeteroscedasticLSTM, MDNTrajectoryLSTM, MDNTransformer,
-    gaussian_nll_loss, mdn_nll_loss,
-)
+from src.model import MODEL_CLASSES, MDN_MODELS, mdn_nll_loss
 from src.config import ExperimentConfig
 
 
@@ -34,7 +29,7 @@ def _get_ss_ratio(epoch: int, total_epochs: int, ss_max: float) -> float:
     return ss_max * epoch / (total_epochs - 1)
 
 
-def _apply_scheduled_sampling(model, inputs, ss_ratio, model_type):
+def _apply_scheduled_sampling(model, inputs, ss_ratio, is_mdn):
     """
     Replace the last step of the input with the model's own prediction.
 
@@ -43,37 +38,27 @@ def _apply_scheduled_sampling(model, inputs, ss_ratio, model_type):
     1. Forward pass on inputs[:, :-1, :] (first seq_len-1 steps)
     2. Get the model's predicted displacement
     3. With probability ss_ratio, replace inputs[:, -1, :] with prediction
-
-    This is efficient (one extra forward on shorter sequence) and targets
-    exactly the error pattern seen during inference.
     """
     if ss_ratio <= 0.0:
         return inputs
 
     B = inputs.shape[0]
-    # Mask: which samples in the batch get scheduled sampling
-    mask = torch.rand(B, device=inputs.device) < ss_ratio  # (B,)
+    mask = torch.rand(B, device=inputs.device) < ss_ratio
     if not mask.any():
         return inputs
 
-    # Forward on the prefix (seq_len - 1 steps) to predict the last step
-    prefix = inputs[:, :-1, :]  # (B, seq_len-1, 2)
+    prefix = inputs[:, :-1, :]
 
     with torch.no_grad():
-        if model_type in ("mdn", "transformer"):
+        if is_mdn:
             pi, mu, _ = model(prefix)
-            # Mixture mean as predicted displacement
-            pi_e = pi.unsqueeze(-1)  # (B, pred_len, K, 1)
-            pred = (pi_e * mu).sum(dim=2)  # (B, pred_len, 2)
-        elif model_type == "heteroscedastic":
-            pred, _ = model(prefix)  # (B, pred_len, 2)
+            pi_e = pi.unsqueeze(-1)
+            pred = (pi_e * mu).sum(dim=2)  # mixture mean
         else:
-            pred = model(prefix)  # (B, pred_len, 2)
+            pred = model(prefix)
 
-    # pred[:, 0, :] is the predicted next displacement (pred_len=1)
-    pred_step = pred[:, 0, :]  # (B, 2)
+    pred_step = pred[:, 0, :]
 
-    # Replace last input step for masked samples
     inputs = inputs.clone()
     inputs[mask, -1, :] = pred_step[mask]
 
@@ -86,21 +71,20 @@ def _apply_scheduled_sampling(model, inputs, ss_ratio, model_type):
 
 def train_one_epoch(model, train_loader, optimizer, device,
                     epoch=0, total_epochs=0, ss_ratio=0.0):
-    """Train MSE model (TrajectoryLSTM) for one epoch."""
+    """Train point model (LSTM / Transformer) with MSE loss."""
     model.train()
     total_loss = 0.0
     n_batches = 0
     criterion = nn.MSELoss()
 
-    desc = f"Epoch {epoch+1}/{total_epochs} [train]" if total_epochs else "Training"
+    desc = f"Epoch {epoch+1}/{total_epochs} [MSE]" if total_epochs else "Training"
     pbar = tqdm(train_loader, desc=desc, leave=False)
     for inputs, targets in pbar:
         inputs = inputs.to(device)
         targets = targets.to(device)
 
         if ss_ratio > 0:
-            inputs = _apply_scheduled_sampling(
-                model, inputs, ss_ratio, "mcdropout")
+            inputs = _apply_scheduled_sampling(model, inputs, ss_ratio, is_mdn=False)
 
         optimizer.zero_grad()
         predictions = model(inputs)
@@ -115,39 +99,9 @@ def train_one_epoch(model, train_loader, optimizer, device,
     return total_loss / n_batches
 
 
-def train_one_epoch_nll(model, train_loader, optimizer, device,
-                        epoch=0, total_epochs=0, ss_ratio=0.0):
-    """Train HeteroscedasticLSTM with Gaussian NLL loss."""
-    model.train()
-    total_loss = 0.0
-    n_batches = 0
-
-    desc = f"Epoch {epoch+1}/{total_epochs} [NLL]" if total_epochs else "Training"
-    pbar = tqdm(train_loader, desc=desc, leave=False)
-    for inputs, targets in pbar:
-        inputs = inputs.to(device)
-        targets = targets.to(device)
-
-        if ss_ratio > 0:
-            inputs = _apply_scheduled_sampling(
-                model, inputs, ss_ratio, "heteroscedastic")
-
-        optimizer.zero_grad()
-        mean, logvar = model(inputs)
-        loss = gaussian_nll_loss(mean, logvar, targets)
-        loss.backward()
-        optimizer.step()
-
-        total_loss += loss.item()
-        n_batches += 1
-        pbar.set_postfix(loss=f"{total_loss / n_batches:.6f}")
-
-    return total_loss / n_batches
-
-
 def train_one_epoch_mdn(model, train_loader, optimizer, device,
                         epoch=0, total_epochs=0, ss_ratio=0.0):
-    """Train MDNTrajectoryLSTM with mixture NLL loss."""
+    """Train MDN model (LSTM_MDN / Transformer_MDN) with mixture NLL loss."""
     model.train()
     total_loss = 0.0
     n_batches = 0
@@ -159,8 +113,7 @@ def train_one_epoch_mdn(model, train_loader, optimizer, device,
         targets = targets.to(device)
 
         if ss_ratio > 0:
-            inputs = _apply_scheduled_sampling(
-                model, inputs, ss_ratio, "mdn")
+            inputs = _apply_scheduled_sampling(model, inputs, ss_ratio, is_mdn=True)
 
         optimizer.zero_grad()
         pi, mu, logvar = model(inputs)
@@ -175,7 +128,7 @@ def train_one_epoch_mdn(model, train_loader, optimizer, device,
     return total_loss / n_batches
 
 
-def evaluate_model(model, data_loader, device):
+def evaluate_model(model, data_loader, device, model_type):
     """Evaluate model, return average loss."""
     model.eval()
     total_loss = 0.0
@@ -186,12 +139,9 @@ def evaluate_model(model, data_loader, device):
             inputs = inputs.to(device)
             targets = targets.to(device)
 
-            if isinstance(model, (MDNTrajectoryLSTM, MDNTransformer)):
+            if model_type in MDN_MODELS:
                 pi, mu, logvar = model(inputs)
                 loss = mdn_nll_loss(pi, mu, logvar, targets)
-            elif isinstance(model, HeteroscedasticLSTM):
-                mean, logvar = model(inputs)
-                loss = gaussian_nll_loss(mean, logvar, targets)
             else:
                 predictions = model(inputs)
                 loss = nn.MSELoss()(predictions, targets)
@@ -206,40 +156,24 @@ def evaluate_model(model, data_loader, device):
 # Model construction
 # ---------------------------------------------------------------------------
 
-_TRAIN_FNS = {
-    "mcdropout": train_one_epoch,
-    "heteroscedastic": train_one_epoch_nll,
-    "mdn": train_one_epoch_mdn,
-    "transformer": train_one_epoch_mdn,  # same MDN loss
-}
-
-
 def build_model(config: ExperimentConfig, device: torch.device) -> nn.Module:
-    """Construct model from config."""
-    if config.model.type == "mcdropout":
-        model = TrajectoryLSTM(
-            hidden_dim=config.model.hidden_dim, pred_len=config.model.pred_len,
-            dropout=config.model.dropout,
+    """Construct model from config using MODEL_CLASSES registry."""
+    model_type = config.model.type
+    if model_type not in MODEL_CLASSES:
+        raise ValueError(
+            f"Unknown model type: {model_type}. "
+            f"Valid types: {list(MODEL_CLASSES.keys())}"
         )
-    elif config.model.type == "heteroscedastic":
-        model = HeteroscedasticLSTM(
-            hidden_dim=config.model.hidden_dim, pred_len=config.model.pred_len,
-            dropout=config.model.dropout,
-        )
-    elif config.model.type == "mdn":
-        model = MDNTrajectoryLSTM(
-            hidden_dim=config.model.hidden_dim, pred_len=config.model.pred_len,
-            dropout=config.model.dropout, n_components=config.model.n_components,
-        )
-    elif config.model.type == "transformer":
-        model = MDNTransformer(
-            hidden_dim=config.model.hidden_dim, pred_len=config.model.pred_len,
-            dropout=config.model.dropout, n_components=config.model.n_components,
-            n_heads=config.model.n_heads, n_layers=config.model.n_layers,
-        )
-    else:
-        raise ValueError(f"Unknown model type: {config.model.type}")
 
+    cls = MODEL_CLASSES[model_type]
+    model = cls(
+        hidden_dim=config.model.hidden_dim,
+        pred_len=config.model.pred_len,
+        dropout=config.model.dropout,
+        n_components=config.model.n_components,
+        n_heads=config.model.n_heads,
+        n_layers=config.model.n_layers,
+    )
     return model.to(device)
 
 
@@ -253,15 +187,16 @@ def train_model(
     val_loader,
     device: torch.device,
     save_dir: str = None,
-) -> Tuple[nn.Module, dict]:
+) -> nn.Module:
     """
     Full training loop with early stopping.
 
     Returns:
-        (model, stats_from_checkpoint) — model with best validation weights loaded
+        model with best validation weights loaded
     """
     model = build_model(config, device)
-    train_fn = _TRAIN_FNS[config.model.type]
+    model_type = config.model.type
+    train_fn = train_one_epoch_mdn if model_type in MDN_MODELS else train_one_epoch
 
     optimizer = torch.optim.Adam(model.parameters(), lr=config.training.lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -270,7 +205,6 @@ def train_model(
     best_val, best_state = float("inf"), None
 
     for epoch in range(config.training.epochs):
-        # Scheduled Sampling: ramp from 0 to ss_max over training
         ss_ratio = _get_ss_ratio(epoch, config.training.epochs, config.training.ss_max)
 
         train_loss = train_fn(
@@ -278,7 +212,7 @@ def train_model(
             epoch=epoch, total_epochs=config.training.epochs,
             ss_ratio=ss_ratio,
         )
-        val_loss = evaluate_model(model, val_loader, device)
+        val_loss = evaluate_model(model, val_loader, device, model_type)
         scheduler.step(val_loss)
 
         if val_loss < best_val:
@@ -327,7 +261,6 @@ def load_checkpoint(
     """
     checkpoint = torch.load(model_path, map_location=device, weights_only=False)
 
-    # Override model type from checkpoint if saved
     saved_type = checkpoint.get("model_type", config.model.type)
     config.model.type = saved_type
 

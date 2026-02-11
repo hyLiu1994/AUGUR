@@ -3,7 +3,7 @@ Experiment configuration management.
 
 Single source of truth for all hyperparameters. Supports:
 - YAML config files with nested structure (configs/*.yaml)
-- CLI overrides with dot notation (--model.type mdn) or flat aliases (--model_type mdn)
+- CLI overrides with dot notation (--model.type lstm_mdn) or flat aliases (--model_type lstm_mdn)
 - Programmatic construction
 
 Structure: ExperimentConfig = DataConfig + ModelConfig + TrainingConfig + SimulationConfig + OutputConfig + seed
@@ -39,15 +39,14 @@ class DataConfig:
 @dataclass
 class ModelConfig:
     """Model architecture parameters. Unused fields are ignored per model type."""
-    type: str = "mdn"  # mcdropout | heteroscedastic | mdn | transformer
+    type: str = "lstm_mdn"  # lstm | lstm_mdn | transformer | transformer_mdn
     hidden_dim: int = 128
-    n_components: int = 3       # MDN / transformer only
+    n_components: int = 3       # MDN variants only
     dropout: float = 0.2
     seq_len: int = 20           # input history window (also simulator buffer length)
     pred_len: int = 1
-    mc_samples: int = 30        # MC Dropout only
-    n_heads: int = 4            # transformer only
-    n_layers: int = 3           # transformer only
+    n_heads: int = 4            # transformer variants only
+    n_layers: int = 3           # transformer variants only
 
 
 @dataclass
@@ -130,7 +129,6 @@ _FLAT_ALIASES = {
     "dropout": "model.dropout",
     "seq_len": "model.seq_len",
     "pred_len": "model.pred_len",
-    "mc_samples": "model.mc_samples",
     "n_heads": "model.n_heads",
     "n_layers": "model.n_layers",
     # Training

@@ -11,7 +11,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from src.model import TrajectoryLSTM
+from src.model import MDN_MODELS
 from src.strategies import STRATEGIES, UNCERTAINTY_STRATEGIES
 from src.data_loader import load_and_segment, latlon_to_meters
 from src.config import ExperimentConfig
@@ -446,13 +446,12 @@ def rolling_simulate(
     displacements = trajectory["displacements"]
     T = len(positions)
     seq_len = config.model.seq_len
-    mc_samples = config.model.mc_samples
     run_epsilon = epsilon_override if epsilon_override is not None else config.epsilon_list[0]
 
     # Determine if we need uncertainty for this strategy
     is_periodic = strategy_name.startswith("periodic_")
     need_uncertainty = strategy_name in UNCERTAINTY_STRATEGIES
-    is_mcdropout = isinstance(model, TrajectoryLSTM)
+    is_mdn = config.model.type in MDN_MODELS
 
     # Get strategy function
     if not is_periodic:
@@ -472,11 +471,7 @@ def rolling_simulate(
     stats_mean = stats["mean"]
     stats_std = stats["std"]
 
-    # Set model mode
-    if need_uncertainty and is_mcdropout:
-        model.train()
-    else:
-        model.eval()
+    model.eval()
 
     for t in range(1, T):
         # Build input from server's buffer
@@ -491,29 +486,16 @@ def rolling_simulate(
 
         unc_meters = 0.0
         with torch.no_grad():
-            if need_uncertainty:
-                if is_mcdropout:
-                    predictions = []
-                    for _ in range(mc_samples):
-                        pred = model(inp_tensor)
-                        predictions.append(pred)
-                    predictions = torch.stack(predictions, dim=0)
-                    mean_pred = predictions.mean(dim=0).cpu().numpy()[0, 0]
-                    std_pred = predictions.std(dim=0).cpu().numpy()[0, 0]
-                else:
-                    mean_t, std_t = model.predict_with_uncertainty(inp_tensor)
-                    mean_pred = mean_t.cpu().numpy()[0, 0]
-                    std_pred = std_t.cpu().numpy()[0, 0]
+            if need_uncertainty and is_mdn:
+                mean_t, std_t = model.predict_with_uncertainty(inp_tensor)
+                mean_pred = mean_t.cpu().numpy()[0, 0]
+                std_pred = std_t.cpu().numpy()[0, 0]
 
                 std_meters = std_pred * stats_std
                 unc_meters = np.sqrt((std_meters ** 2).sum())
                 uncertainties[t] = unc_meters
             else:
-                if is_mcdropout:
-                    pred = model(inp_tensor)
-                    mean_pred = pred.cpu().numpy()[0, 0]
-                else:
-                    mean_pred = model.predict_mean(inp_tensor).cpu().numpy()[0, 0]
+                mean_pred = model.predict_mean(inp_tensor).cpu().numpy()[0, 0]
 
         # Denormalize prediction
         pred_disp_meters = mean_pred * stats_std + stats_mean

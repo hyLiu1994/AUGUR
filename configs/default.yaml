@@ -10,13 +10,12 @@ data:
   max_test_trajs: 0
 
 model:
-  type: mdn
+  type: lstm_mdn
   hidden_dim: 128
   n_components: 3
   dropout: 0.2
   seq_len: 20
   pred_len: 1
-  mc_samples: 30
 
 training:
   epochs: 50

@@ -5,7 +5,7 @@ data:
   max_test_trajs: 500
 
 model:
-  type: transformer
+  type: transformer_mdn
   hidden_dim: 128
   n_heads: 4
   n_layers: 3
