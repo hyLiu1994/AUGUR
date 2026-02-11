@@ -17,7 +17,7 @@ from typing import Tuple
 from tqdm import tqdm
 
 from src.model import (
-    TrajectoryLSTM, HeteroscedasticLSTM, MDNTrajectoryLSTM,
+    TrajectoryLSTM, HeteroscedasticLSTM, MDNTrajectoryLSTM, MDNTransformer,
     gaussian_nll_loss, mdn_nll_loss,
 )
 from src.config import ExperimentConfig
@@ -60,7 +60,7 @@ def _apply_scheduled_sampling(model, inputs, ss_ratio, model_type):
     prefix = inputs[:, :-1, :]  # (B, seq_len-1, 2)
 
     with torch.no_grad():
-        if model_type == "mdn":
+        if model_type in ("mdn", "transformer"):
             pi, mu, _ = model(prefix)
             # Mixture mean as predicted displacement
             pi_e = pi.unsqueeze(-1)  # (B, pred_len, K, 1)
@@ -186,7 +186,7 @@ def evaluate_model(model, data_loader, device):
             inputs = inputs.to(device)
             targets = targets.to(device)
 
-            if isinstance(model, MDNTrajectoryLSTM):
+            if isinstance(model, (MDNTrajectoryLSTM, MDNTransformer)):
                 pi, mu, logvar = model(inputs)
                 loss = mdn_nll_loss(pi, mu, logvar, targets)
             elif isinstance(model, HeteroscedasticLSTM):
@@ -210,6 +210,7 @@ _TRAIN_FNS = {
     "mcdropout": train_one_epoch,
     "heteroscedastic": train_one_epoch_nll,
     "mdn": train_one_epoch_mdn,
+    "transformer": train_one_epoch_mdn,  # same MDN loss
 }
 
 
@@ -229,6 +230,12 @@ def build_model(config: ExperimentConfig, device: torch.device) -> nn.Module:
         model = MDNTrajectoryLSTM(
             hidden_dim=config.model.hidden_dim, pred_len=config.model.pred_len,
             dropout=config.model.dropout, n_components=config.model.n_components,
+        )
+    elif config.model.type == "transformer":
+        model = MDNTransformer(
+            hidden_dim=config.model.hidden_dim, pred_len=config.model.pred_len,
+            dropout=config.model.dropout, n_components=config.model.n_components,
+            n_heads=config.model.n_heads, n_layers=config.model.n_layers,
         )
     else:
         raise ValueError(f"Unknown model type: {config.model.type}")
@@ -298,6 +305,8 @@ def train_model(
                 "pred_len": config.model.pred_len,
                 "dropout": config.model.dropout,
                 "n_components": config.model.n_components,
+                "n_heads": config.model.n_heads,
+                "n_layers": config.model.n_layers,
             },
         }, ckpt_path)
         print(f"  Saved model to {ckpt_path}")

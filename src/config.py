@@ -39,13 +39,15 @@ class DataConfig:
 @dataclass
 class ModelConfig:
     """Model architecture parameters. Unused fields are ignored per model type."""
-    type: str = "mdn"  # mcdropout | heteroscedastic | mdn
+    type: str = "mdn"  # mcdropout | heteroscedastic | mdn | transformer
     hidden_dim: int = 128
-    n_components: int = 3       # MDN only
+    n_components: int = 3       # MDN / transformer only
     dropout: float = 0.2
     seq_len: int = 20           # input history window (also simulator buffer length)
     pred_len: int = 1
     mc_samples: int = 30        # MC Dropout only
+    n_heads: int = 4            # transformer only
+    n_layers: int = 3           # transformer only
 
 
 @dataclass
@@ -129,6 +131,8 @@ _FLAT_ALIASES = {
     "seq_len": "model.seq_len",
     "pred_len": "model.pred_len",
     "mc_samples": "model.mc_samples",
+    "n_heads": "model.n_heads",
+    "n_layers": "model.n_layers",
     # Training
     "epochs": "training.epochs",
     "batch_size": "training.batch_size",
