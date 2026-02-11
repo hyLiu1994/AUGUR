@@ -215,23 +215,23 @@ _TRAIN_FNS = {
 
 def build_model(config: ExperimentConfig, device: torch.device) -> nn.Module:
     """Construct model from config."""
-    if config.model_type == "mcdropout":
+    if config.model.type == "mcdropout":
         model = TrajectoryLSTM(
-            hidden_dim=config.hidden_dim, pred_len=config.pred_len,
-            dropout=config.dropout,
+            hidden_dim=config.model.hidden_dim, pred_len=config.model.pred_len,
+            dropout=config.model.dropout,
         )
-    elif config.model_type == "heteroscedastic":
+    elif config.model.type == "heteroscedastic":
         model = HeteroscedasticLSTM(
-            hidden_dim=config.hidden_dim, pred_len=config.pred_len,
-            dropout=config.dropout,
+            hidden_dim=config.model.hidden_dim, pred_len=config.model.pred_len,
+            dropout=config.model.dropout,
         )
-    elif config.model_type == "mdn":
+    elif config.model.type == "mdn":
         model = MDNTrajectoryLSTM(
-            hidden_dim=config.hidden_dim, pred_len=config.pred_len,
-            dropout=config.dropout, n_components=config.n_components,
+            hidden_dim=config.model.hidden_dim, pred_len=config.model.pred_len,
+            dropout=config.model.dropout, n_components=config.model.n_components,
         )
     else:
-        raise ValueError(f"Unknown model type: {config.model_type}")
+        raise ValueError(f"Unknown model type: {config.model.type}")
 
     return model.to(device)
 
@@ -254,21 +254,21 @@ def train_model(
         (model, stats_from_checkpoint) — model with best validation weights loaded
     """
     model = build_model(config, device)
-    train_fn = _TRAIN_FNS[config.model_type]
+    train_fn = _TRAIN_FNS[config.model.type]
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=config.training.lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, factor=0.5, patience=5
     )
     best_val, best_state = float("inf"), None
 
-    for epoch in range(config.epochs):
+    for epoch in range(config.training.epochs):
         # Scheduled Sampling: ramp from 0 to ss_max over training
-        ss_ratio = _get_ss_ratio(epoch, config.epochs, config.ss_max)
+        ss_ratio = _get_ss_ratio(epoch, config.training.epochs, config.training.ss_max)
 
         train_loss = train_fn(
             model, train_loader, optimizer, device,
-            epoch=epoch, total_epochs=config.epochs,
+            epoch=epoch, total_epochs=config.training.epochs,
             ss_ratio=ss_ratio,
         )
         val_loss = evaluate_model(model, val_loader, device)
@@ -279,8 +279,8 @@ def train_model(
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
 
         lr = optimizer.param_groups[0]["lr"]
-        ss_str = f", ss={ss_ratio:.2f}" if config.ss_max > 0 else ""
-        print(f"  Epoch {epoch+1}/{config.epochs}: "
+        ss_str = f", ss={ss_ratio:.2f}" if config.training.ss_max > 0 else ""
+        print(f"  Epoch {epoch+1}/{config.training.epochs}: "
               f"train={train_loss:.6f}, val={val_loss:.6f}, lr={lr:.1e}{ss_str}")
 
     model.load_state_dict(best_state)
@@ -292,12 +292,12 @@ def train_model(
         ckpt_path = os.path.join(save_dir, "model.pt")
         torch.save({
             "model_state": model.state_dict(),
-            "model_type": config.model_type,
+            "model_type": config.model.type,
             "config": {
-                "hidden_dim": config.hidden_dim,
-                "pred_len": config.pred_len,
-                "dropout": config.dropout,
-                "n_components": config.n_components,
+                "hidden_dim": config.model.hidden_dim,
+                "pred_len": config.model.pred_len,
+                "dropout": config.model.dropout,
+                "n_components": config.model.n_components,
             },
         }, ckpt_path)
         print(f"  Saved model to {ckpt_path}")
@@ -318,9 +318,9 @@ def load_checkpoint(
     """
     checkpoint = torch.load(model_path, map_location=device, weights_only=False)
 
-    # Override model_type from checkpoint if saved
-    saved_type = checkpoint.get("model_type", config.model_type)
-    config.model_type = saved_type
+    # Override model type from checkpoint if saved
+    saved_type = checkpoint.get("model_type", config.model.type)
+    config.model.type = saved_type
 
     model = build_model(config, device)
     model.load_state_dict(checkpoint["model_state"])

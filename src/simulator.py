@@ -26,11 +26,11 @@ def prepare_long_trajectories(config: ExperimentConfig):
         displacements: (T-1, 2) step-wise displacements in meters
     """
     segments = load_and_segment(
-        config.data_dir,
-        min_segment_len=config.min_traj_len,
+        config.data.dir,
+        min_segment_len=config.data.min_traj_len,
     )
 
-    max_len = config.max_traj_len
+    max_len = config.data.max_traj_len
 
     trajectories = []
     for seg in segments:
@@ -43,7 +43,7 @@ def prepare_long_trajectories(config: ExperimentConfig):
         # Split long trajectories into sub-trajectories of max_len
         for start in range(0, len(positions), max_len):
             sub_pos = positions[start : start + max_len]
-            if len(sub_pos) < config.min_traj_len:
+            if len(sub_pos) < config.data.min_traj_len:
                 break  # tail too short, discard
             sub_disp = np.diff(sub_pos, axis=0)
             trajectories.append({
@@ -64,17 +64,17 @@ def split_trajectories(trajectories, config: ExperimentConfig):
     rng = np.random.default_rng(config.seed)
     rng.shuffle(trajectories)
 
-    if config.data_fraction < 1.0:
-        n_use = max(10, int(len(trajectories) * config.data_fraction))
+    if config.data.fraction < 1.0:
+        n_use = max(10, int(len(trajectories) * config.data.fraction))
         trajectories = trajectories[:n_use]
-        print(f"  Using {config.data_fraction:.0%} of data: {n_use} trajectories")
+        print(f"  Using {config.data.fraction:.0%} of data: {n_use} trajectories")
 
     n_train = int(len(trajectories) * 0.7)
     train_trajs = trajectories[:n_train]
     test_trajs = trajectories[n_train:]
 
-    if config.max_test_trajs and len(test_trajs) > config.max_test_trajs:
-        test_trajs = test_trajs[:config.max_test_trajs]
+    if config.data.max_test_trajs and len(test_trajs) > config.data.max_test_trajs:
+        test_trajs = test_trajs[:config.data.max_test_trajs]
 
     print(f"  Train: {len(train_trajs)}, Test: {len(test_trajs)} trajectories")
     return train_trajs, test_trajs
@@ -277,8 +277,8 @@ def rolling_simulate(
     positions = trajectory["positions"]
     displacements = trajectory["displacements"]
     T = len(positions)
-    seq_len = config.seq_len
-    mc_samples = config.mc_samples
+    seq_len = config.model.seq_len
+    mc_samples = config.model.mc_samples
     run_epsilon = epsilon_override if epsilon_override is not None else config.epsilon_list[0]
 
     # Determine if we need uncertainty for this strategy
@@ -551,9 +551,9 @@ def run_all_strategies(model, test_trajs, stats, config, device, median_unc):
 
     # ML-based strategies
     for name, params in strategies.items():
-        if name.startswith("periodic_") or name.startswith("dead_reckoning_") or name.startswith("kalman_dps_"):
-            # periodic handled in rolling_simulate, model-free baselines handled above
-            pass
+        if name.startswith("dead_reckoning_") or name.startswith("kalman_dps_"):
+            # model-free baselines already handled above
+            continue
 
         print(f"  Running {name}...")
         total_errors, total_comms, total_steps = [], 0, 0
