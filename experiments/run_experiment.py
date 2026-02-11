@@ -52,7 +52,7 @@ def main():
     # === Step 1: Prepare data ===
     print("\n=== Step 1: Prepare trajectories ===")
     trajectories = prepare_long_trajectories(config)
-    train_trajs, test_trajs = split_trajectories(trajectories, config)
+    train_trajs, val_trajs, test_trajs = split_trajectories(trajectories, config)
 
     needs_model = _needs_model(config)
     model, stats, median_unc = None, None, 0.0

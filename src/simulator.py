@@ -69,15 +69,26 @@ def split_trajectories(trajectories, config: ExperimentConfig):
         trajectories = trajectories[:n_use]
         print(f"  Using {config.data.fraction:.0%} of data: {n_use} trajectories")
 
-    n_train = int(len(trajectories) * config.data.train_ratio)
+    n_total = len(trajectories)
+    n_train = int(n_total * config.data.train_ratio)
+    n_val = int(n_total * config.data.val_ratio)
     train_trajs = trajectories[:n_train]
-    test_trajs = trajectories[n_train:]
+    val_trajs = trajectories[n_train:n_train + n_val]
+    test_trajs = trajectories[n_train + n_val:]
 
     if config.data.max_test_trajs and len(test_trajs) > config.data.max_test_trajs:
         test_trajs = test_trajs[:config.data.max_test_trajs]
 
-    print(f"  Train: {len(train_trajs)}, Test: {len(test_trajs)} trajectories")
-    return train_trajs, test_trajs
+    def _len_stats(trajs, name):
+        lengths = [len(t["positions"]) for t in trajs]
+        print(f"  {name}: {len(trajs)} trajectories | "
+              f"len min={min(lengths)}, median={int(np.median(lengths))}, "
+              f"max={max(lengths)}, mean={np.mean(lengths):.0f}")
+
+    _len_stats(train_trajs, "Train")
+    _len_stats(val_trajs, "Val")
+    _len_stats(test_trajs, "Test")
+    return train_trajs, val_trajs, test_trajs
 
 
 # ---------------------------------------------------------------------------
