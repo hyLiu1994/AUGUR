@@ -152,89 +152,148 @@ def rolling_simulate_dead_reckoning(trajectory, epsilon):
 
 
 # ---------------------------------------------------------------------------
-# GRTS baseline (no ML model)
+# CDR baseline (no ML model)
 # ---------------------------------------------------------------------------
 
-def _perpendicular_distance(point, line_start, line_end):
-    """Perpendicular distance from point to line segment (line_start -> line_end)."""
-    line_vec = line_end - line_start
+def _point_to_segment_distance(point, seg_start, seg_end):
+    """Distance from point to line segment (seg_start -> seg_end)."""
+    line_vec = seg_end - seg_start
     line_len_sq = (line_vec ** 2).sum()
     if line_len_sq < 1e-12:
-        return np.sqrt(((point - line_start) ** 2).sum())
-    # Project point onto line, clamped to [0, 1]
-    t = max(0.0, min(1.0, np.dot(point - line_start, line_vec) / line_len_sq))
-    projection = line_start + t * line_vec
+        return np.sqrt(((point - seg_start) ** 2).sum())
+    t = max(0.0, min(1.0, np.dot(point - seg_start, line_vec) / line_len_sq))
+    projection = seg_start + t * line_vec
     return np.sqrt(((point - projection) ** 2).sum())
 
 
-def rolling_simulate_grts(trajectory, epsilon):
+def rolling_simulate_cdr(trajectory, epsilon):
     """
-    GRTS baseline (Lange et al., VLDB Journal 2011).
+    Connection-Preserving Dead Reckoning (Lange et al., VLDB Journal 2011).
 
-    Generic Remote Trajectory Simplification with opening window.
+    CDR extends Linear Dead Reckoning with a "section condition" that ensures
+    the simplified trajectory u(t) — a continuous polyline — stays within
+    epsilon of the actual trajectory.
 
-    Two-pass approach:
-    Pass 1 (client-side): Opening window line simplification.
-      - Maintain anchor point. For each new point, check if line segment
-        anchor -> current fits all intermediate points within epsilon.
-      - If not, emit previous point as new anchor.
-    Pass 2 (server-side): Linear interpolation between consecutive anchors.
-      - Server knows the sequence of anchor points and their timestamps.
-      - Between anchors, server linearly interpolates positions.
+    Algorithm (per paper's Algorithm 1):
+    Client maintains:
+      - u_P: prediction origin (last update position)
+      - v_P: predicted velocity
+      - s_L: last sensed position
+      - S: sensing history (positions since last update)
 
-    This is equivalent to the server receiving anchor points and reconstructing
-    the trajectory via piecewise linear interpolation — the standard GRTS protocol.
+    At each new position s_C, check two conditions:
+      c_L: LDR condition — |s_C - predicted_pos| > epsilon
+      c_S: Section condition — any s_i in S deviates from line segment
+            u_P -> s_C by more than epsilon
+
+    If either fails:
+      - Set new u_P = s_L (last sensed position, NOT current!)
+      - Compute velocity from s_L to s_C
+      - Send (u_P, velocity) to MOD
+      - Clear sensing history
+
+    Server (MOD):
+      - On receiving (u_n, v_n): extend trajectory with line segment
+        u_{n-1} -> u_n, then use DR for current position
+      - For past queries: linear interpolation along polyline
+      - For current queries: u_n + (t - u_n.t) * v_n
     """
     positions = trajectory["positions"]
     T = len(positions)
 
-    # === Pass 1: Client-side opening window simplification ===
-    # Collect anchor points: (time, position)
-    anchors = [(0, positions[0].copy())]  # first point is always an anchor
-    anchor_t = 0
+    server_positions = np.zeros_like(positions)
+    server_positions[0] = positions[0].copy()
+    comm_indices = []
+    pred_errors = np.zeros(T)
+
+    # Client state
+    u_P = positions[0].copy()   # prediction origin
+    u_P_t = 0                   # time of prediction origin
+    velocity = np.zeros(2)      # predicted velocity
+    s_L = positions[0].copy()   # last sensed position
+    s_L_t = 0                   # time of last sensed position
+    S = []                      # sensing history: list of (time, position)
+
+    # Server state: list of trajectory vertices for interpolation
+    # Each vertex is (time, position). Server reconstructs polyline from these.
+    trajectory_vertices = [(0, positions[0].copy())]
 
     for t in range(1, T):
-        # Check if line anchor -> current fits all intermediate points
-        segment_ok = True
-        for k in range(anchor_t + 1, t):
-            d = _perpendicular_distance(positions[k], positions[anchor_t], positions[t])
-            if d > epsilon:
-                segment_ok = False
+        s_C = positions[t]  # current sensed position
+
+        # Server predicts current position via DR
+        dt = t - u_P_t
+        predicted_pos = u_P + velocity * dt
+        server_positions[t] = predicted_pos
+
+        pred_error = np.sqrt(((s_C - predicted_pos) ** 2).sum())
+        pred_errors[t] = pred_error
+
+        # === Check conditions ===
+        # c_L: LDR condition
+        c_L = pred_error <= epsilon
+
+        # c_S: Section condition — check all s_i in S against segment u_P -> s_C
+        c_S = True
+        for (s_i_t, s_i_pos) in S:
+            # Distance from s_i to line segment u_P -> s_C
+            # We need spatiotemporal distance: interpolate on segment at s_i's time
+            if t > u_P_t:
+                alpha = (s_i_t - u_P_t) / (t - u_P_t)
+                interp_pos = u_P + alpha * (s_C - u_P)
+            else:
+                interp_pos = u_P.copy()
+            dist = np.sqrt(((s_i_pos - interp_pos) ** 2).sum())
+            if dist > epsilon:
+                c_S = False
                 break
 
-        if not segment_ok:
-            # Emit previous point as new anchor
-            anchors.append((t - 1, positions[t - 1].copy()))
-            anchor_t = t - 1
+        if not (c_L and c_S):
+            # === Communication: send update ===
+            # New prediction origin = s_L (last sensed position)
+            new_u_P = s_L.copy()
+            new_u_P_t = s_L_t
 
-    # Last point is always an anchor (trajectory endpoint)
-    if anchors[-1][0] != T - 1:
-        anchors.append((T - 1, positions[T - 1].copy()))
+            # New velocity = direction from s_L to s_C
+            dt_vel = t - s_L_t
+            if dt_vel > 0:
+                new_velocity = (s_C - s_L) / dt_vel
+            else:
+                new_velocity = np.zeros(2)
 
-    # === Pass 2: Server-side linear interpolation between anchors ===
-    server_positions = np.zeros_like(positions)
-    comm_indices = []
+            # Add s_L as new vertex in server's trajectory
+            trajectory_vertices.append((new_u_P_t, new_u_P.copy()))
+            comm_indices.append(t)
 
-    for i in range(len(anchors) - 1):
-        t_start, pos_start = anchors[i]
-        t_end, pos_end = anchors[i + 1]
+            # Retroactively fix server positions between last u_P and new u_P
+            prev_t, prev_pos = trajectory_vertices[-2]
+            curr_t, curr_pos = trajectory_vertices[-1]
+            if curr_t > prev_t:
+                for k in range(prev_t, curr_t + 1):
+                    alpha = (k - prev_t) / (curr_t - prev_t)
+                    server_positions[k] = prev_pos + alpha * (curr_pos - prev_pos)
 
-        if i > 0:  # first anchor is free (initial position)
-            comm_indices.append(t_start)
+            # Update server's current position with new DR
+            dt_new = t - new_u_P_t
+            server_positions[t] = new_u_P + new_velocity * dt_new
 
-        span = t_end - t_start
-        for t in range(t_start, t_end):
-            alpha = (t - t_start) / span if span > 0 else 0.0
-            server_positions[t] = pos_start + alpha * (pos_end - pos_start)
+            # Update client state
+            u_P = new_u_P
+            u_P_t = new_u_P_t
+            velocity = new_velocity
+            S = []  # clear sensing history
 
-    # Fill last anchor
-    last_t, last_pos = anchors[-1]
-    server_positions[last_t] = last_pos.copy()
-    if last_t != anchors[-2][0]:  # last anchor is a communication
-        comm_indices.append(last_t)
+        # Add current position to sensing history
+        S.append((t, s_C.copy()))
+        s_L = s_C.copy()
+        s_L_t = t
+
+    # Final: retroactively fix positions from last vertex to end
+    if len(trajectory_vertices) >= 1:
+        last_v_t, last_v_pos = trajectory_vertices[-1]
+        # The tail after last vertex uses DR, which is already set
 
     errors = np.sqrt(((positions - server_positions) ** 2).sum(axis=-1))
-    pred_errors = errors.copy()  # for GRTS, pred_error = tracking error
 
     return {
         "errors": errors,
@@ -629,7 +688,7 @@ def run_all_strategies(model, test_trajs, stats, config, device, median_unc):
     # Model-free baselines
     _MODEL_FREE = {
         "dead_reckoning": rolling_simulate_dead_reckoning,
-        "grts": rolling_simulate_grts,
+        "cdr": rolling_simulate_cdr,
         "kalman_dps": rolling_simulate_kalman_dps,
     }
 

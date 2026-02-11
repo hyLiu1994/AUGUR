@@ -319,7 +319,7 @@ def save_config(config: ExperimentConfig, path: str):
 
 def _needs_model_for_strategies(config: ExperimentConfig) -> bool:
     """Check if any selected strategy requires a trained model."""
-    NO_MODEL = {"dead_reckoning", "grts", "kalman_dps"}
+    NO_MODEL = {"dead_reckoning", "cdr", "kalman_dps"}
     selected = config.strategies_list
     if selected is None:
         return True

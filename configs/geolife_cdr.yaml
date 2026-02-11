@@ -5,7 +5,7 @@ data:
   max_test_trajs: 500
 
 simulation:
-  strategies: grts
+  strategies: cdr
 
 output:
   note: geolife_500test
