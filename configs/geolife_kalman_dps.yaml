@@ -2,9 +2,10 @@ _base_: default.yaml
 
 data:
   dir: ~/Datasets/Geolife Trajectories 1.3
+  max_test_trajs: 500
 
 simulation:
   strategies: kalman_dps
 
 output:
-  note: geolife
+  note: geolife_500test
