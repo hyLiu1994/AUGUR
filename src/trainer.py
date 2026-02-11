@@ -66,11 +66,40 @@ def _apply_scheduled_sampling(model, inputs, ss_ratio, is_mdn):
 
 
 # ---------------------------------------------------------------------------
+# Masked mode helper
+# ---------------------------------------------------------------------------
+
+def _apply_random_masking(inputs, mask_ratio):
+    """
+    Zero out random time steps and concatenate a mask channel.
+
+    For masked buffer_mode: instead of feeding model predictions back,
+    we zero out unobserved steps and add a binary channel (1=observed, 0=masked).
+    This breaks the error compounding feedback loop.
+
+    Args:
+        inputs: (B, seq_len, 2) displacement sequences
+        mask_ratio: fraction of steps to mask (0..1)
+
+    Returns:
+        (B, seq_len, 3) tensor with [dx, dy, obs_mask]
+    """
+    B, S, D = inputs.shape
+    # obs_mask: 1 = keep (observed), 0 = mask (unobserved)
+    obs_mask = (torch.rand(B, S, device=inputs.device) >= mask_ratio).float()
+    # Zero out masked steps
+    masked_inputs = inputs * obs_mask.unsqueeze(-1)
+    # Concatenate mask channel
+    return torch.cat([masked_inputs, obs_mask.unsqueeze(-1)], dim=-1)
+
+
+# ---------------------------------------------------------------------------
 # Training functions
 # ---------------------------------------------------------------------------
 
 def train_one_epoch(model, train_loader, optimizer, device,
-                    epoch=0, total_epochs=0, ss_ratio=0.0):
+                    epoch=0, total_epochs=0, ss_ratio=0.0,
+                    buffer_mode="autoregressive"):
     """Train point model (LSTM / Transformer) with MSE loss."""
     model.train()
     total_loss = 0.0
@@ -83,7 +112,9 @@ def train_one_epoch(model, train_loader, optimizer, device,
         inputs = inputs.to(device)
         targets = targets.to(device)
 
-        if ss_ratio > 0:
+        if buffer_mode == "masked":
+            inputs = _apply_random_masking(inputs, mask_ratio=ss_ratio)
+        elif ss_ratio > 0:
             inputs = _apply_scheduled_sampling(model, inputs, ss_ratio, is_mdn=False)
 
         optimizer.zero_grad()
@@ -100,7 +131,8 @@ def train_one_epoch(model, train_loader, optimizer, device,
 
 
 def train_one_epoch_mdn(model, train_loader, optimizer, device,
-                        epoch=0, total_epochs=0, ss_ratio=0.0):
+                        epoch=0, total_epochs=0, ss_ratio=0.0,
+                        buffer_mode="autoregressive"):
     """Train MDN model (LSTM_MDN / Transformer_MDN) with mixture NLL loss."""
     model.train()
     total_loss = 0.0
@@ -112,7 +144,9 @@ def train_one_epoch_mdn(model, train_loader, optimizer, device,
         inputs = inputs.to(device)
         targets = targets.to(device)
 
-        if ss_ratio > 0:
+        if buffer_mode == "masked":
+            inputs = _apply_random_masking(inputs, mask_ratio=ss_ratio)
+        elif ss_ratio > 0:
             inputs = _apply_scheduled_sampling(model, inputs, ss_ratio, is_mdn=True)
 
         optimizer.zero_grad()
@@ -128,7 +162,8 @@ def train_one_epoch_mdn(model, train_loader, optimizer, device,
     return total_loss / n_batches
 
 
-def evaluate_model(model, data_loader, device, model_type):
+def evaluate_model(model, data_loader, device, model_type,
+                   buffer_mode="autoregressive"):
     """Evaluate model, return average loss."""
     model.eval()
     total_loss = 0.0
@@ -138,6 +173,12 @@ def evaluate_model(model, data_loader, device, model_type):
         for inputs, targets in tqdm(data_loader, desc="Validating", leave=False):
             inputs = inputs.to(device)
             targets = targets.to(device)
+
+            # Masked mode: validation data is fully observed → mask channel = 1
+            if buffer_mode == "masked":
+                ones = torch.ones(inputs.shape[0], inputs.shape[1], 1,
+                                  device=device, dtype=inputs.dtype)
+                inputs = torch.cat([inputs, ones], dim=-1)
 
             if model_type in MDN_MODELS:
                 pi, mu, logvar = model(inputs)
@@ -167,6 +208,8 @@ def build_model(config: ExperimentConfig, device: torch.device) -> nn.Module:
 
     cls = MODEL_CLASSES[model_type]
     model = cls(
+        input_dim=config.model.input_dim,
+        output_dim=2,
         hidden_dim=config.model.hidden_dim,
         pred_len=config.model.pred_len,
         dropout=config.model.dropout,
@@ -196,6 +239,7 @@ def train_model(
     """
     model = build_model(config, device)
     model_type = config.model.type
+    buffer_mode = config.model.buffer_mode
     train_fn = train_one_epoch_mdn if model_type in MDN_MODELS else train_one_epoch
 
     optimizer = torch.optim.Adam(model.parameters(), lr=config.training.lr)
@@ -205,14 +249,19 @@ def train_model(
     best_val, best_state = float("inf"), None
 
     for epoch in range(config.training.epochs):
-        ss_ratio = _get_ss_ratio(epoch, config.training.epochs, config.training.ss_max)
+        if buffer_mode == "masked":
+            # Masked mode: use fixed mask ratio (no ramp)
+            ss_ratio = config.training.ss_max
+        else:
+            ss_ratio = _get_ss_ratio(epoch, config.training.epochs, config.training.ss_max)
 
         train_loss = train_fn(
             model, train_loader, optimizer, device,
             epoch=epoch, total_epochs=config.training.epochs,
-            ss_ratio=ss_ratio,
+            ss_ratio=ss_ratio, buffer_mode=buffer_mode,
         )
-        val_loss = evaluate_model(model, val_loader, device, model_type)
+        val_loss = evaluate_model(model, val_loader, device, model_type,
+                                  buffer_mode=buffer_mode)
         scheduler.step(val_loss)
 
         if val_loss < best_val:
@@ -220,9 +269,14 @@ def train_model(
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
 
         lr = optimizer.param_groups[0]["lr"]
-        ss_str = f", ss={ss_ratio:.2f}" if config.training.ss_max > 0 else ""
+        if buffer_mode == "masked":
+            extra_str = f", mask={ss_ratio:.2f}"
+        elif config.training.ss_max > 0:
+            extra_str = f", ss={ss_ratio:.2f}"
+        else:
+            extra_str = ""
         print(f"  Epoch {epoch+1}/{config.training.epochs}: "
-              f"train={train_loss:.6f}, val={val_loss:.6f}, lr={lr:.1e}{ss_str}")
+              f"train={train_loss:.6f}, val={val_loss:.6f}, lr={lr:.1e}{extra_str}")
 
     model.load_state_dict(best_state)
     model = model.to(device)
@@ -234,6 +288,7 @@ def train_model(
         torch.save({
             "model_state": model.state_dict(),
             "model_type": config.model.type,
+            "buffer_mode": buffer_mode,
             "config": {
                 "hidden_dim": config.model.hidden_dim,
                 "pred_len": config.model.pred_len,
@@ -264,9 +319,12 @@ def load_checkpoint(
     saved_type = checkpoint.get("model_type", config.model.type)
     config.model.type = saved_type
 
+    saved_buffer_mode = checkpoint.get("buffer_mode", "autoregressive")
+    config.model.buffer_mode = saved_buffer_mode
+
     model = build_model(config, device)
     model.load_state_dict(checkpoint["model_state"])
-    print(f"  Loaded {saved_type} model from {model_path}")
+    print(f"  Loaded {saved_type} model (buffer_mode={saved_buffer_mode}) from {model_path}")
 
     stats = checkpoint.get("stats", None)
     return model, stats

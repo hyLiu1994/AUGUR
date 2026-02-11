@@ -97,6 +97,7 @@ class LSTM(nn.Module):
     def __init__(
         self,
         input_dim: int = 2,
+        output_dim: int = 2,
         hidden_dim: int = 128,
         num_layers: int = 2,
         pred_len: int = 1,
@@ -106,6 +107,7 @@ class LSTM(nn.Module):
         super().__init__()
         self.pred_len = pred_len
         self.input_dim = input_dim
+        self.output_dim = output_dim
 
         self.lstm = nn.LSTM(
             input_size=input_dim,
@@ -114,13 +116,13 @@ class LSTM(nn.Module):
             batch_first=True,
             dropout=dropout if num_layers > 1 else 0,
         )
-        self.fc = nn.Linear(hidden_dim, pred_len * input_dim)
+        self.fc = nn.Linear(hidden_dim, pred_len * output_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         lstm_out, _ = self.lstm(x)
         last_hidden = lstm_out[:, -1, :]
         out = self.fc(last_hidden)
-        return out.view(-1, self.pred_len, self.input_dim)
+        return out.view(-1, self.pred_len, self.output_dim)
 
     def predict_mean(self, x: torch.Tensor) -> torch.Tensor:
         self.eval()
@@ -142,6 +144,7 @@ class LSTM_MDN(nn.Module):
     def __init__(
         self,
         input_dim: int = 2,
+        output_dim: int = 2,
         hidden_dim: int = 128,
         num_layers: int = 2,
         pred_len: int = 1,
@@ -152,6 +155,7 @@ class LSTM_MDN(nn.Module):
         super().__init__()
         self.pred_len = pred_len
         self.input_dim = input_dim
+        self.output_dim = output_dim
         self.n_components = n_components
 
         self.lstm = nn.LSTM(
@@ -164,14 +168,14 @@ class LSTM_MDN(nn.Module):
 
         K = n_components
         self.fc_pi = nn.Linear(hidden_dim, pred_len * K)
-        self.fc_mu = nn.Linear(hidden_dim, pred_len * K * input_dim)
-        self.fc_logvar = nn.Linear(hidden_dim, pred_len * K * input_dim)
+        self.fc_mu = nn.Linear(hidden_dim, pred_len * K * output_dim)
+        self.fc_logvar = nn.Linear(hidden_dim, pred_len * K * output_dim)
 
     def forward(
         self, x: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         B = x.shape[0]
-        K, P, D = self.n_components, self.pred_len, self.input_dim
+        K, P, D = self.n_components, self.pred_len, self.output_dim
 
         lstm_out, _ = self.lstm(x)
         last_hidden = lstm_out[:, -1, :]
@@ -205,13 +209,14 @@ class Transformer(nn.Module):
     """
     Transformer encoder backbone + point output head.
 
-    Input:  (batch, seq_len, 2) displacement sequence
+    Input:  (batch, seq_len, 2 or 3) displacement sequence (3 if masked mode)
     Output: (batch, pred_len, 2) predicted displacements
     """
 
     def __init__(
         self,
         input_dim: int = 2,
+        output_dim: int = 2,
         hidden_dim: int = 128,
         n_heads: int = 4,
         n_layers: int = 3,
@@ -222,6 +227,7 @@ class Transformer(nn.Module):
         super().__init__()
         self.pred_len = pred_len
         self.input_dim = input_dim
+        self.output_dim = output_dim
 
         self.input_proj = nn.Linear(input_dim, hidden_dim)
         self.pos_enc = _PositionalEncoding(hidden_dim, dropout=dropout)
@@ -232,14 +238,14 @@ class Transformer(nn.Module):
             batch_first=True, activation="gelu",
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
-        self.fc = nn.Linear(hidden_dim, pred_len * input_dim)
+        self.fc = nn.Linear(hidden_dim, pred_len * output_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         h = self.pos_enc(self.input_proj(x))
         h = self.transformer(h)
         last_hidden = h[:, -1, :]
         out = self.fc(last_hidden)
-        return out.view(-1, self.pred_len, self.input_dim)
+        return out.view(-1, self.pred_len, self.output_dim)
 
     def predict_mean(self, x: torch.Tensor) -> torch.Tensor:
         self.eval()
@@ -261,6 +267,7 @@ class Transformer_MDN(nn.Module):
     def __init__(
         self,
         input_dim: int = 2,
+        output_dim: int = 2,
         hidden_dim: int = 128,
         n_heads: int = 4,
         n_layers: int = 3,
@@ -272,6 +279,7 @@ class Transformer_MDN(nn.Module):
         super().__init__()
         self.pred_len = pred_len
         self.input_dim = input_dim
+        self.output_dim = output_dim
         self.n_components = n_components
 
         self.input_proj = nn.Linear(input_dim, hidden_dim)
@@ -286,14 +294,14 @@ class Transformer_MDN(nn.Module):
 
         K = n_components
         self.fc_pi = nn.Linear(hidden_dim, pred_len * K)
-        self.fc_mu = nn.Linear(hidden_dim, pred_len * K * input_dim)
-        self.fc_logvar = nn.Linear(hidden_dim, pred_len * K * input_dim)
+        self.fc_mu = nn.Linear(hidden_dim, pred_len * K * output_dim)
+        self.fc_logvar = nn.Linear(hidden_dim, pred_len * K * output_dim)
 
     def forward(
         self, x: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         B = x.shape[0]
-        K, P, D = self.n_components, self.pred_len, self.input_dim
+        K, P, D = self.n_components, self.pred_len, self.output_dim
 
         h = self.pos_enc(self.input_proj(x))
         h = self.transformer(h)

@@ -16,6 +16,7 @@ model:
   dropout: 0.2
   seq_len: 20
   pred_len: 1
+  buffer_mode: autoregressive  # autoregressive | masked
 
 training:
   epochs: 50

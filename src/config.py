@@ -47,6 +47,12 @@ class ModelConfig:
     pred_len: int = 1
     n_heads: int = 4            # transformer variants only
     n_layers: int = 3           # transformer variants only
+    buffer_mode: str = "autoregressive"  # autoregressive | masked
+
+    @property
+    def input_dim(self) -> int:
+        """Input feature dimension: 2 (dx,dy) for autoregressive, 3 (+mask) for masked."""
+        return 3 if self.buffer_mode == "masked" else 2
 
 
 @dataclass
@@ -131,6 +137,7 @@ _FLAT_ALIASES = {
     "pred_len": "model.pred_len",
     "n_heads": "model.n_heads",
     "n_layers": "model.n_layers",
+    "buffer_mode": "model.buffer_mode",
     # Training
     "epochs": "training.epochs",
     "batch_size": "training.batch_size",

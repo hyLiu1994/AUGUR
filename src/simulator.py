@@ -440,12 +440,15 @@ def rolling_simulate(
 
     - Client has ground truth -> makes communication decisions
     - Server only knows what it received via communication
-    - Between communications, server uses its OWN predictions as input
+    - Between communications:
+        - autoregressive: server uses its OWN predictions as input
+        - masked: server fills buffer with 0 + obs_mask=0 (no feedback loop)
     """
     positions = trajectory["positions"]
     displacements = trajectory["displacements"]
     T = len(positions)
     seq_len = config.model.seq_len
+    buffer_mode = config.model.buffer_mode
     run_epsilon = epsilon_override if epsilon_override is not None else config.epsilon_list[0]
 
     # Determine if we need uncertainty for this strategy
@@ -462,6 +465,8 @@ def rolling_simulate(
 
     # Server's displacement buffer (normalized)
     server_disp_norm = np.zeros((T - 1, 2), dtype=np.float64)
+    # Observation mask: 1 = ground truth received, 0 = unobserved (masked mode only)
+    obs_mask = np.zeros(T - 1, dtype=np.float64)
     server_positions = np.zeros_like(positions)
     server_positions[0] = positions[0].copy()
     comm_indices = []
@@ -476,11 +481,23 @@ def rolling_simulate(
     for t in range(1, T):
         # Build input from server's buffer
         if t - 1 < seq_len:
-            available = server_disp_norm[:t - 1]
-            pad_len = seq_len - len(available)
-            inp = np.concatenate([np.zeros((pad_len, 2), dtype=np.float32), available], axis=0)
+            available_disp = server_disp_norm[:t - 1]
+            available_mask = obs_mask[:t - 1]
+            pad_len = seq_len - len(available_disp)
+            disp_inp = np.concatenate(
+                [np.zeros((pad_len, 2), dtype=np.float32), available_disp], axis=0)
+            mask_inp = np.concatenate(
+                [np.zeros(pad_len, dtype=np.float32), available_mask], axis=0)
         else:
-            inp = server_disp_norm[t - 1 - seq_len : t - 1]
+            disp_inp = server_disp_norm[t - 1 - seq_len : t - 1]
+            mask_inp = obs_mask[t - 1 - seq_len : t - 1]
+
+        if buffer_mode == "masked":
+            # Concatenate obs_mask channel: (seq_len, 3)
+            inp = np.concatenate(
+                [disp_inp, mask_inp[:, np.newaxis]], axis=-1).astype(np.float32)
+        else:
+            inp = disp_inp.astype(np.float32)
 
         inp_tensor = torch.tensor(inp, dtype=torch.float32).unsqueeze(0).to(device)
 
@@ -525,10 +542,16 @@ def rolling_simulate(
         if communicated:
             server_positions[t] = true_pos.copy()
             server_disp_norm[t - 1] = (displacements[t - 1] - stats_mean) / stats_std
+            obs_mask[t - 1] = 1.0
             comm_indices.append(t)
             strategy_state["accumulated_risk"] = 0.0
         else:
-            server_disp_norm[t - 1] = mean_pred
+            if buffer_mode == "masked":
+                # No feedback: buffer stays 0, obs_mask stays 0
+                pass
+            else:
+                # Autoregressive: write model prediction back into buffer
+                server_disp_norm[t - 1] = mean_pred
 
     errors = np.sqrt(((positions - server_positions) ** 2).sum(axis=-1))
 
