@@ -185,8 +185,8 @@ def rolling_simulate_kalman_dps(trajectory, epsilon):
         [0,       dt**2/2, 0,       dt     ],
     ], dtype=np.float64) * q
 
-    # Measurement noise
-    R = np.eye(2, dtype=np.float64) * 10.0  # 10 m^2
+    # Measurement noise — positions are ground truth, not noisy GPS
+    R = np.eye(2, dtype=np.float64) * 0.1
 
     # --- Initialize client and server KFs identically ---
     x_client = np.array([positions[0, 0], positions[0, 1], 0.0, 0.0])
@@ -232,12 +232,10 @@ def rolling_simulate_kalman_dps(trajectory, epsilon):
         pred_errors[t] = pred_error
 
         if pred_error > epsilon:
-            # Communicate: server gets true position, does KF update
-            y_server = z - H @ x_server_pred
-            S_server = H @ P_server_pred @ H.T + R
-            K_server = P_server_pred @ H.T @ np.linalg.inv(S_server)
-            x_server = x_server_pred + K_server @ y_server
-            P_server = (np.eye(4) - K_server @ H) @ P_server_pred
+            # Communicate: synchronize server KF to client KF state
+            # This is the correct DPS — on communication both sides align
+            x_server = x_client.copy()
+            P_server = P_client.copy()
 
             server_positions[t] = true_pos.copy()
             comm_indices.append(t)
